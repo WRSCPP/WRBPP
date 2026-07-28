@@ -809,3 +809,13 @@ body.readonly .g-bar,body.readonly .lc-build,body.readonly .td-name{cursor:point
 
 /* Viewers never reach Settings, but keep the panel out of read-only mode entirely. */
 body.readonly #adminPeopleRoot{display:none !important}
+
+/* Longer app name needs to survive narrow screens without crowding the header. */
+@media (max-width:720px){
+  .brand{flex-wrap:wrap;gap:0 8px}
+  .brand h1{font-size:19px}
+  .brand .sub{font-size:9.5px}
+}
+@media (max-width:420px){
+  .brand h1{font-size:17px;letter-spacing:0}
+}

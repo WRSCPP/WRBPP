@@ -8,7 +8,7 @@
 
 import { signIn } from './store-cloud.js';
 
-export function showAuthGate({ heading = 'Traveler', note = '' } = {}) {
+export function showAuthGate({ heading = 'Production Planner', note = '' } = {}) {
   // Remove anything the page already rendered. A viewer should not see even a
   // skeleton of the app before authenticating.
   document.body.innerHTML = '';
@@ -27,7 +27,7 @@ export function showAuthGate({ heading = 'Traveler', note = '' } = {}) {
     <div style="width:100%;max-width:360px">
       <div style="text-align:center;margin-bottom:22px">
         <div style="font-size:25px;font-weight:800;letter-spacing:-.01em">${heading}</div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-top:5px">Production Planning</div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-top:5px">Wind River Built</div>
       </div>
       <div style="background:#fff;border:1px solid #e2ddd0;border-radius:10px;padding:22px">
         <div style="font-size:13.5px;color:#4b5563;line-height:1.55;margin-bottom:16px">
