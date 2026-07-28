@@ -72,6 +72,19 @@ async function boot() {
       globalThis.__TRAVELER_CAN_WRITE__ = canWrite;
       globalThis.__TRAVELER_ACTOR__ = session.user?.email || 'unknown';
 
+      // Admin is a narrower tier than editor: it additionally allows managing
+      // accounts and permissions. Only asked when the person can already write,
+      // since an admin is by definition an editor.
+      let isAdmin = false;
+      if (canWrite) {
+        try {
+          isAdmin = await cloud.isAdmin();
+        } catch (err) {
+          console.warn('Traveler: could not confirm admin status.', err);
+        }
+      }
+      globalThis.__TRAVELER_IS_ADMIN__ = isAdmin;
+
       const backend = cloud.createCloudBackend({
         onRemoteChange: () => {
           // Let the app know something changed elsewhere; app.js listens for this.
@@ -105,6 +118,15 @@ async function boot() {
         const { mountAuthUI } = await import('./auth-ui.js');
         mountAuthUI(session);
       };
+
+      // The People & Access panel is loaded only for admins, so the module never
+      // reaches the ~20 viewers' browsers at all.
+      if (isAdmin) {
+        globalThis.__TRAVELER_MOUNT_ADMIN__ = async () => {
+          const { initAdminPanel } = await import('./admin-ui.js');
+          initAdminPanel(session.user?.email || '');
+        };
+      }
     }
     // 'local' needs no setup — store.js falls through to IndexedDB.
 
@@ -122,6 +144,10 @@ async function boot() {
     // sweep, so the read-only pass can't lock the button out either.
     if (globalThis.__TRAVELER_MOUNT_AUTH__) {
       await globalThis.__TRAVELER_MOUNT_AUTH__();
+    }
+
+    if (globalThis.__TRAVELER_MOUNT_ADMIN__) {
+      await globalThis.__TRAVELER_MOUNT_ADMIN__();
     }
   } catch (err) {
     fatal('Something went wrong while starting up.', String(err && err.message || err));

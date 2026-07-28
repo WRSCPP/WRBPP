@@ -32,10 +32,44 @@ async function loadLib() {
 }
 
 let clientPromise = null;
+
+// Validate config before handing it to the library. createClient() throws
+// "Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL" for anything
+// malformed, which doesn't say which value is wrong or what it should look like.
+function checkConfig(url, key) {
+  const example = "Expected: URL: 'https://yourproject.supabase.co'  —  from Supabase → Project Settings → API.";
+  if (!url || /^PASTE_/.test(url)) {
+    throw new Error(`config.js still has the placeholder Project URL. ${example}`);
+  }
+  if (!key || /^PASTE_/.test(key)) {
+    throw new Error('config.js still has the placeholder anon key. Copy the "anon public" key from Supabase → Project Settings → API.');
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`The Project URL in config.js isn't a valid URL: "${url}". ${example}`);
+  }
+  if (!/^https?:$/.test(parsed.protocol)) {
+    throw new Error(`The Project URL in config.js is missing "https://". ${example}`);
+  }
+  if (/supabase\.com/.test(parsed.hostname)) {
+    throw new Error(`config.js has the dashboard address, not the API endpoint: "${url}". ` +
+      'You want the *.supabase.co Project URL from Project Settings → API, not the supabase.com/dashboard link.');
+  }
+  if (key.split('.').length !== 3) {
+    throw new Error('The anon key in config.js doesn\'t look like a key. It should be a long string starting "eyJ" with two dots in it.');
+  }
+}
+
 export function getClient() {
   if (clientPromise) return clientPromise;
   const { URL: url, ANON_KEY: key } = CONFIG.SUPABASE;
-  if (!url || !key) return Promise.reject(new Error('Supabase URL/key missing in config.js'));
+  try {
+    checkConfig(url, key);
+  } catch (err) {
+    return Promise.reject(err);
+  }
   clientPromise = loadLib().then(({ createClient }) =>
     createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true } }));
   return clientPromise;
@@ -167,6 +201,15 @@ export async function signOut() {
 export async function isEditor() {
   const sb = await getClient();
   const { data, error } = await sb.rpc('is_editor');
+  if (error) throw error;
+  return data === true;
+}
+
+// Admins are also editors, so this is a strictly narrower check: may this person
+// manage accounts and permissions? Same SECURITY DEFINER pattern as is_editor().
+export async function isAdmin() {
+  const sb = await getClient();
+  const { data, error } = await sb.rpc('is_admin');
   if (error) throw error;
   return data === true;
 }

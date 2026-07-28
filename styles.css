@@ -781,3 +781,31 @@ body.readonly .g-bar,body.readonly .lc-build,body.readonly .td-name{cursor:point
 .auth-overlay{display:flex;align-items:center;justify-content:center}
 .auth-modal{max-width:380px;width:92%}
 .auth-err{color:var(--clay);font-size:12.5px;font-weight:600;padding:8px 10px;background:color-mix(in srgb,var(--clay) 8%,var(--card));border:1px solid var(--clay);border-radius:var(--radius)}
+
+/* ---------- Admin: People & Access ---------- */
+.admin-card{margin-bottom:14px}
+.admin-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-top:12px}
+.admin-row{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--card);flex-wrap:wrap}
+.admin-row.is-me{background:color-mix(in srgb,var(--timber) 5%,var(--card))}
+.admin-who{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.admin-email{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-you{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:4px;font-weight:500}
+.admin-meta{font-size:11px;color:var(--text-muted)}
+.admin-warn{color:var(--clay);font-weight:600}
+.admin-role{font-size:12.5px;padding:4px 6px;min-width:96px}
+.admin-acts{display:flex;gap:6px;flex-shrink:0}
+.admin-add{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+.admin-add-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:8px}
+.admin-add-fields{display:flex;gap:7px;flex-wrap:wrap}
+.admin-add-fields input{flex:1 1 170px;min-width:0;padding:6px 9px;font-size:13px}
+.admin-add-fields select{padding:6px 9px;font-size:13px}
+.admin-add-hint{font-size:11.5px;color:var(--text-muted);line-height:1.5;margin-top:8px}
+.admin-msg{font-size:12.5px;font-weight:600;padding:7px 10px;border-radius:var(--radius);margin-top:10px}
+.admin-msg.info{background:color-mix(in srgb,var(--timber) 8%,var(--card));color:var(--ink)}
+.admin-msg.ok{background:color-mix(in srgb,#157A6E 10%,var(--card));color:#0f5c53}
+.admin-msg.err{background:color-mix(in srgb,var(--clay) 9%,var(--card));color:var(--clay)}
+.admin-err{color:var(--clay);font-weight:600}
+.admin-note{font-size:12px;line-height:1.55;color:var(--text-muted);background:color-mix(in srgb,var(--sand,#CE8214) 8%,var(--card));border:1px solid var(--line);border-radius:var(--radius);padding:9px 11px;margin-top:11px}
+
+/* Viewers never reach Settings, but keep the panel out of read-only mode entirely. */
+body.readonly #adminPeopleRoot{display:none !important}

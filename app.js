@@ -1483,7 +1483,11 @@ function renderSettings() {
       <input type="file" id="importFile" accept="application/json" hidden>
       <span class="td-sub" id="storageNote"></span>
     </div>
+    <div id="adminPeopleRoot"></div>
     <div class="settings-grid">${lineCards}${peopleCard}${stageCard}${optCards}</div>`;
+  // Admins get the People & Access panel. The hook is only defined when main.js
+  // loaded admin-ui.js, so this is a no-op for editors and viewers.
+  globalThis.__TRAVELER_RENDER_ADMIN__?.();
   $('#storageNote').textContent = repo.backend.isMemory ? 'Storage: in-memory (this browser lacks IndexedDB — data will not persist)' : 'Storage: IndexedDB (persists across refreshes on this device)';
 }
 
