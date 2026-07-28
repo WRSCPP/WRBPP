@@ -19,8 +19,20 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
-const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') || '*';
+
+// Projects on the newer key format (sb_publishable_ / sb_secret_) may not have
+// SUPABASE_SERVICE_ROLE_KEY populated. Supabase reserves the SUPABASE_ prefix and
+// refuses secrets that use it, so the key has to be supplied under another name:
+//
+//   supabase secrets set SERVICE_KEY=sb_secret_...
+//
+// SERVICE_KEY is checked first; the auto-injected legacy variable is the fallback
+// so this keeps working on older projects with no extra configuration.
+const SERVICE_ROLE =
+  Deno.env.get('SERVICE_KEY') ||
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ||
+  '';
 
 const MIN_PASSWORD = 8;
 
@@ -47,6 +59,18 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== 'POST') {
     return json(405, { error: 'Use POST.' });
+  }
+
+  // Without a service key every admin call fails, and the symptom is a confusing
+  // 401 about the caller's session rather than a message about configuration.
+  // Say what's actually wrong.
+  if (!SERVICE_ROLE) {
+    return json(500, {
+      error: 'This function has no service key. Set one and redeploy:  ' +
+             'supabase secrets set SERVICE_KEY=<your secret key from ' +
+             'Project Settings → API → Secret keys>  then  ' +
+             'supabase functions deploy admin-users',
+    });
   }
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
