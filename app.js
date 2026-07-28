@@ -18,11 +18,27 @@ import { SEED_BUILDS, SEED_LINES, SEED_STAGES, SEED_SETTINGS } from './seed.js';
 
 const repo = new Repository();
 
-// Whether this session may write. main.js sets this from the database's own
-// is_editor() check in cloud mode; it is undefined in local mode, where the
-// single desktop user always can. Anything that writes must respect it — a
-// rejected write in cloud mode surfaces as a silent no-op or a dead page.
-const CAN_WRITE = globalThis.__TRAVELER_CAN_WRITE__ !== false;
+// Whether this session may write.
+//
+// Fails CLOSED in cloud mode. __TRAVELER_CLOUD__ is set by every version of
+// main.js that runs cloud mode, so its presence means "a server is involved" —
+// and in that case write access must be granted explicitly by an is_editor()
+// check, never assumed. The earlier `!== false` test defaulted to true when the
+// flag was absent, so a stale main.js silently handed every viewer an editable
+// interface. Being wrongly read-only is a complaint; being wrongly writable is
+// a data-integrity problem.
+//
+// In local mode there is no cloud module and one desktop user, who always can.
+const CAN_WRITE = globalThis.__TRAVELER_CLOUD__
+  ? globalThis.__TRAVELER_CAN_WRITE__ === true
+  : globalThis.__TRAVELER_CAN_WRITE__ !== false;
+
+if (globalThis.__TRAVELER_CLOUD__ && globalThis.__TRAVELER_CAN_WRITE__ === undefined) {
+  console.warn(
+    'Production Planner: main.js did not report write permission, so this session is ' +
+    'read-only. This usually means main.js is an older version than app.js — ' +
+    'redeploy main.js.');
+}
 
 // Who to record in the audit trail. In cloud mode this is the signed-in email,
 // so "who changed this build" is answerable across editors and shared accounts.
@@ -1846,6 +1862,13 @@ function renderBuildModal() {
 
 // ----------------------------- Mutations -----------------------------
 async function patchBuild(id, patch) {
+  // Belt-and-braces: never attempt a write this session isn't allowed to make.
+  // UI locking is cosmetic and can be bypassed — by a control type that ignores
+  // readOnly, a handler bound to a container, or devtools. Guarding here means a
+  // viewer's edit is dropped before it reaches storage, so they never see a value
+  // appear to change and then snap back.
+  if (!CAN_WRITE) return;
+
   // Edits to an unsaved draft update the in-memory draft only — no storage write,
   // no history event — until the user explicitly saves.
   if (state.draftBuild && state.draftBuild.id === id) {

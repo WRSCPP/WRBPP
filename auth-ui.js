@@ -45,8 +45,13 @@ export function mountAuthUI(session) {
   });
 
   onAuthChange((s) => {
+    // Only re-render the button. Do NOT touch body.readonly here: read-only is
+    // decided at startup from is_editor(), not from whether a session exists.
+    // Toggling it on session presence unlocked the CSS for signed-in viewers
+    // while readonly.js kept their controls disabled — visible buttons that do
+    // nothing. Both sign-in and sign-out reload, so startup is the only place
+    // that needs to make this decision.
     render(s);
-    document.body.classList.toggle('readonly', !s);
   });
 
   function openDialog() {

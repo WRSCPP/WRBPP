@@ -14,15 +14,24 @@ const ALLOWED = [
   '.auth-box', '[data-auth]', '.auth-overlay', '.auth-modal',
 ].join(',');
 
+// Input types where readOnly does nothing and disabled is the only option.
+const NEEDS_DISABLE = new Set([
+  'range', 'checkbox', 'radio', 'color', 'file', 'button', 'submit', 'reset', 'image',
+]);
+
 function lockField(el) {
   // The sign-in button and its dialog must NEVER be locked — it's the only way a
   // viewer becomes an editor. Skip anything inside the auth UI, always.
   if (el.closest('.auth-box, .auth-overlay, .auth-modal') || el.matches('[data-auth]')) return;
   if (el.matches(ALLOWED) || el.closest(ALLOWED)) return;
   if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-    if (el.type === 'file') { el.disabled = true; return; }
-    el.readOnly = true;
-    el.tabIndex = -1;
+    // The readOnly property is only honoured on text-like inputs. Range,
+    // checkbox, radio, colour and file IGNORE it completely — a read-only range
+    // stays fully draggable. Those have to be disabled instead. Without this, a
+    // viewer can drag the stage-progress slider, the save is rejected by RLS,
+    // and the value silently snaps back on the next render.
+    if (NEEDS_DISABLE.has(el.type)) { el.disabled = true; el.tabIndex = -1; }
+    else { el.readOnly = true; el.tabIndex = -1; }
   } else if (el.tagName === 'SELECT' || el.tagName === 'BUTTON') {
     el.disabled = true;
   }
