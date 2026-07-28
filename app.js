@@ -8,6 +8,7 @@
  * render of what's in the repository plus what the engine computes from it.
  */
 import { Repository } from './store.js';
+import { hydrateSigned, attachmentHref } from './signed-urls.js';
 import {
   projectAll, projectBuild, analyzeCapacity, forecastPortfolio, forecastBuild,
   suggestStart, buildDuration, effectiveStart, toISO, addWorkdays,
@@ -1598,7 +1599,7 @@ async function fileToAttachment(file) {
   if (cloud) {
     try {
       const up = await cloud.uploadFile(file);
-      return { kind: 'file', name: up.name, mime: up.type || '', size: up.size, url: up.url, path: up.path, addedAt: new Date().toISOString() };
+      return { kind: 'file', name: up.name, mime: up.type || '', size: up.size, path: up.path, addedAt: new Date().toISOString() };
     } catch (err) {
       alert(`Upload failed: ${err.message || err}`);
       return null;
@@ -1755,6 +1756,8 @@ function renderBuildModal() {
         const assignedAnywhere = new Set(Object.values(b.stageCrew || {}).flat().filter(Boolean));
         const pool = (state.settings.people || []).filter((p) => !assignedAnywhere.has(p.id));
         const chip = (p, sid) => `<span class="crew-chip assigned" draggable="true" data-crew-person="${p.id}" data-crew-from="${sid || ''}" title="${esc(p.role || '')} — drag to reassign">${esc(p.name)}<button type="button" class="crew-chip-x" data-crew-remove="${p.id}" data-crew-stage="${sid}" title="Unassign">✕</button></span>`;
+  // Fill in signed URLs for any private-bucket images this render produced.
+  hydrateSigned($('#buildModal'));
         return `
         <div class="crew-pool" data-crew-drop="__pool__">
           <div class="crew-lane-label">Available crew — by role</div>
@@ -1819,7 +1822,7 @@ function renderBuildModal() {
                 <input type="file" accept="image/*" multiple class="attach-input" data-insp-photo-file="${ins.id}" hidden>
               </div>
               ${photos.length ? `<div class="insp-photo-grid">${photos.map((ph, i) =>
-                `<div class="insp-photo"><img src="${ph.url || ph.data}" alt="${esc(ph.name || 'photo')}"><button type="button" class="insp-photo-x" data-insp-photo-remove="${ins.id}" data-insp-photo-idx="${i}" title="Remove">✕</button></div>`).join('')}</div>` : ''}
+                `<div class="insp-photo"><img ${ph.data ? `src="${ph.data}"` : (ph.path ? `data-signed-path="${esc(ph.path)}"` : `src="${esc(ph.url || '')}"`)} alt="${esc(ph.name || 'photo')}"><button type="button" class="insp-photo-x" data-insp-photo-remove="${ins.id}" data-insp-photo-idx="${i}" title="Remove">✕</button></div>`).join('')}</div>` : ''}
             </div>
             <label class="field"><span>Notes / issues found</span><textarea rows="2" data-insp-field="notes" data-insp-id="${ins.id}" placeholder="Note any issues found during inspection…">${esc(d.notes || '')}</textarea></label>
           </div>`;
@@ -2025,7 +2028,7 @@ function wireGlobalEvents() {
       const entry = { ...(data[iid] || {}) }; const photos = [...(entry.photos || [])];
       for (const file of inspPhotoInput.files) {
         const att = await fileToAttachment(file);
-        if (att) photos.push({ name: att.name, data: att.data, url: att.url });
+        if (att) photos.push({ name: att.name, data: att.data, url: att.url, path: att.path });
       }
       entry.photos = photos; data[iid] = entry;
       await patchBuild(id, { inspectionData: data });
@@ -2170,7 +2173,7 @@ function wireGlobalEvents() {
       for (const file of [...(e.dataTransfer?.files || [])]) {
         if (!file.type.startsWith('image/')) continue;
         const att = await fileToAttachment(file);
-        if (att) photos.push({ name: att.name, data: att.data, url: att.url });
+        if (att) photos.push({ name: att.name, data: att.data, url: att.url, path: att.path });
       }
       entry.photos = photos; data[iid] = entry;
       await patchBuild(id, { inspectionData: data });
@@ -2265,7 +2268,15 @@ function wireGlobalEvents() {
     if (open) {
       const key = open.dataset.attachOpen; const idx = Number(open.dataset.attachIdx);
       const cur = currentBuild(); const it = cur.attachments?.[key]?.[idx];
-      if (it && (it.data || it.url)) { const a = document.createElement('a'); a.href = it.url || it.data; a.download = it.name || 'file'; if (it.url) { a.target = '_blank'; a.rel = 'noopener'; } a.click(); }
+      if (!it) return;
+      // Private bucket: mint a signed URL now rather than storing one, so links
+      // can't be copied out of the record and used later or by someone else.
+      const href = await attachmentHref(it);
+      if (!href) { alert(`"${it.name || 'That file'}" could not be opened. It may have been removed from storage.`); return; }
+      const a = document.createElement('a');
+      a.href = href; a.download = it.name || 'file';
+      if (!it.data) { a.target = '_blank'; a.rel = 'noopener'; }
+      a.click();
       return;
     }
     // --- end attachments ---

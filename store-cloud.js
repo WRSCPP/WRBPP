@@ -265,6 +265,35 @@ export async function uploadFile(file, pathPrefix = 'attachments') {
   const path = `${pathPrefix}/${Date.now()}-${safe}`;
   const { error } = await sb.storage.from('traveler-files').upload(path, file, { upsert: false });
   if (error) throw error;
-  const { data } = sb.storage.from('traveler-files').getPublicUrl(path);
-  return { name: file.name, size: file.size, type: file.type, path, url: data.publicUrl };
+  // No public URL: the bucket is private, so a public URL would 404 and, worse,
+  // would be stored in the record as if it were valid. Callers keep `path` and
+  // mint a short-lived signed URL when they actually need to show the file.
+  return { name: file.name, size: file.size, type: file.type, path };
+}
+
+/** A single time-limited URL for one stored file. */
+export async function signedUrl(path, expiresIn = 3600) {
+  const sb = await getClient();
+  const { data, error } = await sb.storage.from('traveler-files').createSignedUrl(path, expiresIn);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+/**
+ * Sign many paths in one request — a build modal can hold a dozen inspection
+ * photos, and signing them individually would be a dozen round trips.
+ * Returns { [path]: url }, omitting any that failed (a deleted file, say)
+ * so one missing photo can't blank out the rest.
+ */
+export async function signedUrls(paths, expiresIn = 3600) {
+  const unique = [...new Set((paths || []).filter(Boolean))];
+  if (!unique.length) return {};
+  const sb = await getClient();
+  const { data, error } = await sb.storage.from('traveler-files').createSignedUrls(unique, expiresIn);
+  if (error) throw error;
+  const out = {};
+  for (const row of data || []) {
+    if (row && row.signedUrl && !row.error) out[row.path] = row.signedUrl;
+  }
+  return out;
 }

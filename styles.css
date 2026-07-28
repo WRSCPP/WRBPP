@@ -819,3 +819,8 @@ body.readonly #adminPeopleRoot{display:none !important}
 @media (max-width:420px){
   .brand h1{font-size:17px;letter-spacing:0}
 }
+
+/* A stored file that could not be signed (deleted from the bucket, or expired
+   permissions) — show it as visibly missing rather than a broken-image icon. */
+.insp-photo img.signed-missing{opacity:.4;background:repeating-linear-gradient(45deg,var(--line) 0 6px,transparent 6px 12px)}
+.insp-photo img[data-signed-done="pending"]{opacity:.5}
