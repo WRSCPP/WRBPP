@@ -57,9 +57,45 @@ function checkConfig(url, key) {
     throw new Error(`config.js has the dashboard address, not the API endpoint: "${url}". ` +
       'You want the *.supabase.co Project URL from Project Settings → API, not the supabase.com/dashboard link.');
   }
-  if (key.split('.').length !== 3) {
-    throw new Error('The anon key in config.js doesn\'t look like a key. It should be a long string starting "eyJ" with two dots in it.');
+  checkKey(key);
+}
+
+// Two key formats are valid in the browser:
+//   * legacy anon key  — a JWT: 'eyJ...' with exactly two dots
+//   * publishable key  — the newer format: 'sb_publishable_...'
+// Both are designed to be public; RLS is what protects the data.
+//
+// Two are NOT, and shipping either to a browser hands every visitor unrestricted
+// access to the database, bypassing RLS entirely. Catch them loudly.
+function checkKey(key) {
+  if (/^sb_secret_/.test(key)) {
+    throw new Error('config.js contains a SECRET key. Remove it immediately — it bypasses all ' +
+      'security and must never be in a browser. Use the publishable key (sb_publishable_...) instead. ' +
+      'If this was committed, rotate it in Supabase → Project Settings → API.');
   }
+  if (/^sb_publishable_/.test(key)) return;
+
+  const parts = key.split('.');
+  if (parts.length === 3) {
+    // Legacy JWT. Decode the payload to make sure it isn't the service_role key,
+    // which is a JWT too and looks nearly identical at a glance.
+    try {
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+      if (payload.role === 'service_role') {
+        throw new Error('config.js contains the SERVICE ROLE key. Remove it immediately — it bypasses ' +
+          'all security and must never be in a browser. Use the "anon public" key instead. ' +
+          'If this was committed, rotate it in Supabase → Project Settings → API.');
+      }
+    } catch (err) {
+      // Re-throw our own message; ignore decode failures on an otherwise valid-shaped key.
+      if (/SERVICE ROLE/.test(err.message)) throw err;
+    }
+    return;
+  }
+
+  throw new Error(`The key in config.js isn't a recognised format (starts "${key.slice(0, 12)}…"). ` +
+    'Expected either the publishable key ("sb_publishable_...") or the legacy anon key ' +
+    '("eyJ..." with two dots), from Supabase → Project Settings → API.');
 }
 
 export function getClient() {
