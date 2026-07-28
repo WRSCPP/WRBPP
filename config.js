@@ -28,8 +28,8 @@ export const CONFIG = {
   // the app shows the "Could not connect" screen.
   // Get them from: Supabase → Settings → API → Project URL, and "anon public".
   SUPABASE: {
-    URL: 'PASTE_PROJECT_URL_HERE',   // e.g. 'https://abcdefgh.supabase.co'
-    ANON_KEY: 'PASTE_ANON_KEY_HERE', // long string starting 'eyJhbG...'
+    URL: 'https://temufmvatmsvxnmqcnal.supabase.co',   // e.g. 'https://abcdefgh.supabase.co'
+    ANON_KEY: 'sb_publishable_wya2GJP7tX6U8rNibAm6PQ_S5-wiaeG', // long string starting 'eyJhbG...'
   },
 
   // Banner text shown at the top of the read-only site.
