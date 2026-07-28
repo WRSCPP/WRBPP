@@ -4,7 +4,17 @@
 
 import { signIn, signOut, onAuthChange } from './store-cloud.js';
 
+// Module-level, so repeat calls to mountAuthUI are safe. ES modules are cached,
+// so every `import('./auth-ui.js')` shares this state. Without this guard, a
+// second mount adds a second click listener to the same #authBox node, and one
+// click on "Sign in to edit" opens two stacked dialogs with duplicate element
+// IDs — which looks exactly like a broken sign-in.
+let mounted = false;
+let rerender = null;
+
 export function mountAuthUI(session) {
+  if (mounted) { rerender?.(session); return; }
+
   // Use the permanent container that lives in index.html. It always exists, so
   // the button can't fail to appear due to render timing.
   let wrap = document.getElementById('authBox') || document.querySelector('.auth-box');
@@ -22,6 +32,8 @@ export function mountAuthUI(session) {
       : `<button class="btn sm primary" data-auth="in">Sign in to edit</button>`;
   };
   render(session);
+  rerender = render;
+  mounted = true;
 
   wrap.addEventListener('click', async (e) => {
     if (e.target.closest('[data-auth="out"]')) {

@@ -16,16 +16,20 @@
 // included schema.sql turns on. Never put a service_role key in this file.
 
 export const CONFIG = {
-  MODE: 'static',
+  MODE: 'cloud',
 
   // --- 'static' (read-only) settings ---
   // Path to the exported data snapshot, relative to index.html.
   DATA_URL: './data/traveler-data.json',
 
   // --- 'cloud' settings ---
+  // ⚠️ BOTH VALUES BELOW MUST BE FILLED IN. With MODE: 'cloud' and these left
+  // empty, getClient() rejects with "Supabase URL/key missing in config.js" and
+  // the app shows the "Could not connect" screen.
+  // Get them from: Supabase → Settings → API → Project URL, and "anon public".
   SUPABASE: {
-    URL: '',      // e.g. 'https://abcdefgh.supabase.co'
-    ANON_KEY: '', // the "anon public" key from Supabase → Settings → API
+    URL: 'PASTE_PROJECT_URL_HERE',   // e.g. 'https://abcdefgh.supabase.co'
+    ANON_KEY: 'PASTE_ANON_KEY_HERE', // long string starting 'eyJhbG...'
   },
 
   // Banner text shown at the top of the read-only site.

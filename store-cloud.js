@@ -160,6 +160,17 @@ export async function signOut() {
   await sb.auth.signOut();
 }
 
+// Ask the database whether the signed-in user may write. This calls the same
+// is_editor() function the RLS policies use, so the UI and the database can
+// never disagree about who is an editor. It's SECURITY DEFINER, so it works
+// regardless of how restrictive the `editors` table's own read policy is.
+export async function isEditor() {
+  const sb = await getClient();
+  const { data, error } = await sb.rpc('is_editor');
+  if (error) throw error;
+  return data === true;
+}
+
 export async function onAuthChange(fn) {
   const sb = await getClient();
   sb.auth.onAuthStateChange((_event, session) => fn(session));

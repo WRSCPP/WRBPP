@@ -16,6 +16,16 @@ import { buildReport } from './analytics.js';
 import { SEED_BUILDS, SEED_LINES, SEED_STAGES, SEED_SETTINGS } from './seed.js';
 
 const repo = new Repository();
+
+// Whether this session may write. main.js sets this from the database's own
+// is_editor() check in cloud mode; it is undefined in local mode, where the
+// single desktop user always can. Anything that writes must respect it — a
+// rejected write in cloud mode surfaces as a silent no-op or a dead page.
+const CAN_WRITE = globalThis.__TRAVELER_CAN_WRITE__ !== false;
+
+// Who to record in the audit trail. In cloud mode this is the signed-in email,
+// so "who changed this build" is answerable across editors and shared accounts.
+function actor() { return globalThis.__TRAVELER_ACTOR__ || 'user'; }
 // Timestamp until which the modal should not be force-rebuilt by data-change
 // events — set briefly during rapid in-modal edits (e.g. logging stage hours) so
 // the DOM stays authoritative and edits aren't clobbered by the async refresh.
@@ -43,14 +53,14 @@ const fmtShort = (iso) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('
 
 // ----------------------------- Boot -----------------------------
 async function boot() {
-  if (await repo.isEmpty()) {
+  if (CAN_WRITE && await repo.isEmpty()) {
     await repo.seed({ builds: SEED_BUILDS, lines: SEED_LINES, stages: SEED_STAGES, settings: SEED_SETTINGS });
   }
   await refresh();
   // Backfill for existing installs: if the new crew/inspection lists don't exist
   // yet (data predates these features), seed the defaults without touching any
   // other settings. Existing builds, hours, lines, and stages are untouched.
-  if (!state.settings.people || !state.settings.inspections || !state.settings.roles) {
+  if (CAN_WRITE && (!state.settings.people || !state.settings.inspections || !state.settings.roles)) {
     const patch = { ...state.settings };
     if (!patch.people) patch.people = SEED_SETTINGS.people;
     if (!patch.inspections) patch.inspections = SEED_SETTINGS.inspections;
@@ -66,7 +76,7 @@ async function boot() {
   // The inspection contact fields used to live on each inspection point. Lift the
   // first non-empty value up to the build so nothing entered earlier is lost.
   for (const b of state.builds) {
-    if (b.inspectionInfo || !b.inspectionData) continue;
+    if (!CAN_WRITE || b.inspectionInfo || !b.inspectionData) continue;
     const info = {};
     for (const key of ['company', 'inspector', 'contact', 'date']) {
       for (const entry of Object.values(b.inspectionData)) {
@@ -81,7 +91,7 @@ async function boot() {
   const orphans = state.builds.filter((b) => (!b.name || !b.name.trim())
     && !b.confirmedStart && !b.tentativeStart && !b.targetShip && !b.actualShip
     && b.status === 'pipeline');
-  if (orphans.length) {
+  if (CAN_WRITE && orphans.length) {
     for (const o of orphans) await repo.deleteBuild(o.id, 'cleanup');
     await refresh();
   }
@@ -1840,7 +1850,7 @@ async function patchBuild(id, patch) {
   // so rapid successive edits to different fields don't clobber one another.
   const current = (await repo.getBuild(id)) || state.builds.find((x) => x.id === id);
   if (!current) return;
-  await repo.saveBuild({ ...current, ...patch }, 'user');
+  await repo.saveBuild({ ...current, ...patch }, actor());
 }
 
 // ----------------------------- Events -----------------------------
@@ -2264,13 +2274,13 @@ function wireGlobalEvents() {
       }
       const toSave = { ...state.draftBuild };
       state.draftBuild = null;
-      await repo.saveBuild(toSave, 'user'); // first real write → single "created" event
+      await repo.saveBuild(toSave, actor()); // first real write → single "created" event
       state.openBuildId = toSave.id;
       renderBuildModal(); // re-render as a normal saved build (Delete/Close footer)
       return;
     }
     if (e.target.closest('[data-cancel-draft]')) { closeBuild(); return; }
-    if (e.target.closest('[data-delete-build]')) { if (confirm('Delete this build permanently?')) { await repo.deleteBuild(id, 'user'); closeBuild(); } return; }
+    if (e.target.closest('[data-delete-build]')) { if (confirm('Delete this build permanently?')) { await repo.deleteBuild(id, actor()); closeBuild(); } return; }
     if (e.target.id === 'completeAllStages') {
       // Mark every production stage 100% complete in one click.
       const stageProgress = Object.fromEntries(state.stages.map((s) => [s.id, 1]));
@@ -2417,4 +2427,14 @@ async function exportBackup() {
   a.download = `traveler-backup-${state.today}.json`; a.click(); URL.revokeObjectURL(a.href);
 }
 
-boot();
+boot().catch((err) => {
+  // boot() was previously called bare, so any failure here vanished into an
+  // unhandled rejection and left a blank page with nothing in the UI.
+  console.error('Traveler: startup failed', err);
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:32px;background:#F5F1E8;color:#1F2A33;font-family:system-ui,sans-serif;z-index:9998;text-align:center';
+  el.innerHTML = '<div style="max-width:460px"><h2 style="margin:0 0 10px;font-size:19px">Traveler couldn\'t finish loading</h2>'
+    + '<p style="margin:0;line-height:1.5;font-size:13.5px">' + String((err && err.message) || err).replace(/</g, '&lt;')
+    + '</p></div>';
+  document.body.appendChild(el);
+});

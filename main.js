@@ -46,6 +46,32 @@ async function boot() {
     } else if (CONFIG.MODE === 'cloud') {
       const cloud = await import('./store-cloud.js');
       const session = await cloud.getSession().catch(() => null);
+
+      // No session: show the wall and stop. Nothing below runs, so no backend is
+      // created and not a single row is requested. This is the whole point —
+      // reads are gated in the database too, but the app shouldn't try.
+      if (!session) {
+        const { showAuthGate } = await import('./auth-gate.js');
+        showAuthGate();
+        return;
+      }
+
+      // Signed in. Now the separate question: may this person write? Everyone in
+      // the company has an account, but only those in the editors table can save.
+      // Read-only must key off THIS, not off having a session — otherwise the ~20
+      // viewers get a fully live interface whose every save is silently rejected.
+      let canWrite = false;
+      try {
+        canWrite = await cloud.isEditor();
+      } catch (err) {
+        // Can't determine editor status — assume viewer. Failing closed means a
+        // viewer sees a correct read-only app; failing open would mean an
+        // editable UI that discards every change.
+        console.warn('Traveler: could not confirm editor status, treating as viewer.', err);
+      }
+      globalThis.__TRAVELER_CAN_WRITE__ = canWrite;
+      globalThis.__TRAVELER_ACTOR__ = session.user?.email || 'unknown';
+
       const backend = cloud.createCloudBackend({
         onRemoteChange: () => {
           // Let the app know something changed elsewhere; app.js listens for this.
@@ -54,12 +80,19 @@ async function boot() {
       });
       globalThis.__TRAVELER_BACKEND__ = backend;
       globalThis.__TRAVELER_CLOUD__ = cloud;
-      // Viewers browse signed-out and get a read-only UI; editors sign in.
-      if (!session) document.body.classList.add('readonly');
+      if (!canWrite) document.body.classList.add('readonly');
       try {
         await backend.whenLoaded();
       } catch (err) {
         const msg = String(err && err.message || err);
+        // A stored session that can no longer be refreshed looks like a database
+        // failure but isn't. Clear it and send them back to the wall.
+        if (/jwt|token|refresh|401|not authenticated|unauthorized/i.test(msg)) {
+          await cloud.signOut().catch(() => {});
+          const { showAuthGate } = await import('./auth-gate.js');
+          showAuthGate({ note: 'Your session expired. Please sign in again.' });
+          return;
+        }
         fatal('Could not connect to the Traveler database.',
           `<b>What the browser reported:</b><br><code>${msg.replace(/</g, '&lt;')}</code>
            <br><br><b>Most common causes:</b>
@@ -68,9 +101,6 @@ async function boot() {
            <br>• The Supabase project is paused (free projects pause after ~1 week idle) — open your Supabase dashboard to wake it.`);
         return;
       }
-      // Remember to mount the sign-in UI, but only AFTER the app has rendered and
-      // the read-only lock has run — otherwise the app's own header render wipes
-      // the button and the lock disables it.
       globalThis.__TRAVELER_MOUNT_AUTH__ = async () => {
         const { mountAuthUI } = await import('./auth-ui.js');
         mountAuthUI(session);
@@ -86,11 +116,12 @@ async function boot() {
       setTimeout(enableReadOnly, 300);
     }
 
-    // Mount sign-in. The container lives in index.html so it always exists; a
-    // tiny delay just lets the read-only sweep run first so we can re-enable it.
+    // Mount sign-in. The container lives in index.html so it always exists, and
+    // app.js only ever renders into #headerStats — it never touches #authBox —
+    // so one mount is enough. readonly.js re-enables auth controls on every
+    // sweep, so the read-only pass can't lock the button out either.
     if (globalThis.__TRAVELER_MOUNT_AUTH__) {
-      globalThis.__TRAVELER_MOUNT_AUTH__();
-      setTimeout(() => globalThis.__TRAVELER_MOUNT_AUTH__(), 500);
+      await globalThis.__TRAVELER_MOUNT_AUTH__();
     }
   } catch (err) {
     fatal('Something went wrong while starting up.', String(err && err.message || err));
