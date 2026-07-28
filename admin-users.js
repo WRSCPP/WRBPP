@@ -27,7 +27,15 @@ async function callFunction(action, payload = {}) {
   try {
     res = await fetch(FN_URL(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: {
+        'Content-Type': 'application/json',
+        // Supabase's API gateway sits in front of Edge Functions and rejects
+        // requests without a project key — with a 401, before the function ever
+        // runs. Authorization carries WHO you are; apikey carries WHICH project.
+        // Both are required.
+        apikey: String(CONFIG.SUPABASE.ANON_KEY || ''),
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ action, ...payload }),
     });
   } catch {
@@ -45,6 +53,18 @@ async function callFunction(action, payload = {}) {
     const err = new Error('The user-management service is not deployed. See the deploy notes.');
     err.notDeployed = true;
     throw err;
+  }
+  if (res.status === 401 || res.status === 403) {
+    // Distinguish our own rejection from the gateway's — they mean very
+    // different things and the fixes are unrelated.
+    const detail = body.error || body.message || body.msg || '(no detail returned)';
+    if (/jwt|api key|apikey|unauthorized/i.test(detail) && !/admin access|not signed in|session is not valid/i.test(detail)) {
+      throw new Error(`Supabase rejected the request before it reached the function (${res.status}): ` +
+        `${detail}. Usually this means the function was deployed with JWT verification on and the ` +
+        `key in config.js doesn't match, or the apikey header was missing. Try redeploying with ` +
+        `--no-verify-jwt (the function checks admin status itself).`);
+    }
+    throw new Error(detail);
   }
   if (!res.ok && res.status !== 207) {
     throw new Error(body.error || `Request failed (${res.status}).`);

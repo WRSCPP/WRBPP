@@ -48,8 +48,23 @@ function sweep(root = document) {
     .forEach((el) => { el.disabled = false; el.readOnly = false; el.removeAttribute('data-locked'); el.tabIndex = 0; });
 }
 
+// The stylesheet hides the Settings tab for read-only sessions, but an access
+// decision must not depend on a stylesheet loading. A stale or blocked
+// styles.css would leave it visible, so remove it from the layout directly.
+function hideEditorOnlyChrome() {
+  document.querySelectorAll('.tab[data-tab="settings"]').forEach((tab) => {
+    tab.style.setProperty('display', 'none', 'important');
+    tab.setAttribute('aria-hidden', 'true');
+    // If a viewer is already sitting on Settings, move them to the Dashboard
+    // rather than leaving them on a view they shouldn't have reached.
+    if (tab.classList.contains('active')) {
+      document.querySelector('.tab[data-tab="dashboard"]')?.click();
+    }
+  });
+}
+
 export function enableReadOnly() {
-  const run = () => sweep(document);
+  const run = () => { sweep(document); hideEditorOnlyChrome(); };
   run();
   // The app re-renders constantly; re-apply after every DOM change.
   const mo = new MutationObserver((records) => {
