@@ -843,3 +843,21 @@ body.readonly #adminPeopleRoot{display:none !important}
 .admin-st-ok{color:var(--text-muted)}
 .admin-st-warn{color:#8a6410;font-weight:600}
 .admin-st-bad{color:var(--clay);font-weight:700}
+
+/* ---------- Settings: collapsible tiles ---------- */
+.settings-card[data-tile] > .settings-card-body{display:none}
+.settings-card[data-tile].tile-open > .settings-card-body{display:block}
+
+.tile-head{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;outline:none}
+.tile-head h3{margin:0;flex:1 1 auto}
+.tile-head:focus-visible{outline:2px solid var(--timber);outline-offset:3px;border-radius:4px}
+.tile-chevron{font-size:19px;line-height:1;color:var(--text-muted);transition:transform .15s ease;flex-shrink:0}
+.settings-card.tile-open > .tile-head .tile-chevron{transform:rotate(90deg)}
+
+/* People & Access: the whole card is the control, so it never expands in place */
+.tile-clickable{cursor:pointer;transition:border-color .12s ease,background .12s ease}
+.tile-clickable:hover{border-color:var(--timber)}
+.tile-clickable:focus-visible{outline:2px solid var(--timber);outline-offset:2px}
+.tile-clickable .tile-head{cursor:pointer}
+.tile-sub{font-size:13px;font-weight:600;margin-top:8px}
+.tile-note{font-size:11.5px;color:var(--text-muted);margin-top:2px}

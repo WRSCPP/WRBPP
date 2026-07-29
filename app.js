@@ -43,6 +43,64 @@ if (globalThis.__TRAVELER_CLOUD__ && globalThis.__TRAVELER_CAN_WRITE__ === undef
 // Who to record in the audit trail. In cloud mode this is the signed-in email,
 // so "who changed this build" is answerable across editors and shared accounts.
 function actor() { return globalThis.__TRAVELER_ACTOR__ || 'user'; }
+
+// Which Settings cards are expanded. Keyed by heading text and held at module
+// scope because every save re-renders the tab, which would otherwise snap
+// everything shut mid-edit.
+const openSettingsCards = new Set();
+
+/**
+ * Turn each .settings-card into a collapsible tile: the heading becomes the
+ * control, everything after it becomes the body.
+ *
+ * Done as a post-render DOM pass rather than by editing the card templates, so
+ * the markup and its delegated #settingsRoot handlers are untouched — and any
+ * card added later is picked up automatically.
+ */
+function makeSettingsCollapsible() {
+  const root = $('#settingsRoot');
+  if (!root) return;
+
+  root.querySelectorAll('.settings-card').forEach((card) => {
+    const h3 = card.querySelector('h3');
+    if (!h3 || card.dataset.tile) return;
+    card.dataset.tile = '1';
+
+    const key = (h3.textContent || '').replace(/\s+/g, ' ').trim();
+    const body = document.createElement('div');
+    body.className = 'settings-card-body';
+    while (h3.nextSibling) body.appendChild(h3.nextSibling);
+    card.appendChild(body);
+
+    const head = document.createElement('div');
+    head.className = 'tile-head';
+    head.setAttribute('role', 'button');
+    head.setAttribute('tabindex', '0');
+    h3.replaceWith(head);
+    head.appendChild(h3);
+    const chev = document.createElement('span');
+    chev.className = 'tile-chevron';
+    chev.textContent = '\u203a';
+    head.appendChild(chev);
+
+    const apply = () => {
+      const open = openSettingsCards.has(key);
+      card.classList.toggle('tile-open', open);
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    apply();
+
+    const toggle = () => {
+      if (openSettingsCards.has(key)) openSettingsCards.delete(key);
+      else openSettingsCards.add(key);
+      apply();
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+}
 // Timestamp until which the modal should not be force-rebuilt by data-change
 // events — set briefly during rapid in-modal edits (e.g. logging stage hours) so
 // the DOM stays authoritative and edits aren't clobbered by the async refresh.
@@ -1502,6 +1560,7 @@ function renderSettings() {
     </div>
     <div id="adminPeopleRoot"></div>
     <div class="settings-grid">${lineCards}${peopleCard}${stageCard}${optCards}</div>`;
+  makeSettingsCollapsible();
   // Admins get the People & Access panel. The hook is only defined when main.js
   // loaded admin-ui.js, so this is a no-op for editors and viewers.
   globalThis.__TRAVELER_RENDER_ADMIN__?.();
