@@ -884,3 +884,7 @@ body.readonly #adminPeopleRoot{display:none !important}
 }
 body.printing .g-head{position:static !important}
 body.printing .g-scroll{max-height:none !important;min-height:0 !important}
+
+/* The removed paper-size picker carried margin-left:auto, which pushed the Print
+   button to the right of the legend. Keep that alignment on the button itself. */
+.g-legend [data-print]{margin-left:auto}

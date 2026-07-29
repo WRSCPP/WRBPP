@@ -653,12 +653,6 @@ function renderGantt() {
       <span class="lg"><i style="background:var(--rust)"></i>Late</span>
       <span class="lg"><i class="tent"></i>Tentative</span>
       <span class="lg"><i class="tgt"></i>Target ship</span>
-      <label class="hf print-pick">Print <select data-print-size="gantt">
-        <option value="letter-landscape">8½×11 landscape</option>
-        <option value="letter-portrait">8½×11 portrait</option>
-        <option value="tabloid-landscape">11×17 landscape</option>
-        <option value="tabloid-portrait">11×17 portrait</option>
-      </select></label>
       <button class="btn sm" data-print="gantt">Print</button>
     </div>
     <div class="g-wrap"><div class="g-scroll">
@@ -832,12 +826,6 @@ function renderBuildHours() {
       </select></label>
       <input class="hf-search" type="search" placeholder="Search builds…" value="${esc(f.search)}" data-hours-filter="search">
       <button class="btn sm" id="exportBuildHours">Export (.csv)</button>
-      <label class="hf print-pick">Print <select data-print-size="hours">
-        <option value="letter-landscape">8½×11 landscape</option>
-        <option value="letter-portrait">8½×11 portrait</option>
-        <option value="tabloid-landscape">11×17 landscape</option>
-        <option value="tabloid-portrait">11×17 portrait</option>
-      </select></label>
       <button class="btn sm" data-print="hours">Print</button>
     </div>
     ${rows.length ? `<div class="hours-grid-wrap"><table class="hours-grid">
@@ -948,55 +936,90 @@ function updateHoursRowLive(inp) {
 // Build Hours prints as a full-width table (crisp, no scaling). The Gantt has a
 // fixed pixel width, so it's scaled to exactly fill the printable width.
 // CSS @page only accepts certain size keywords — 11×17 is "ledger", not "tabloid".
-const PAGE_IN = { letter: [8.5, 11], tabloid: [11, 17] };
-const PAGE_CSS_NAME = { letter: 'letter', tabloid: 'ledger' };
-function printView(kind, sizeSpec) {
-  const [paper, orient] = (sizeSpec || 'letter-landscape').split('-');
-  const [shortIn, longIn] = PAGE_IN[paper] || PAGE_IN.letter;
-  const landscape = orient === 'landscape';
-  const marginIn = 0.35;
-  const pageWidthPx = ((landscape ? longIn : shortIn) - marginIn * 2) * 96;
+// Printing is driven entirely by the browser's own print dialog — Ctrl+P, the
+// File menu, or the Print button, which just calls window.print(). No paper size
+// or orientation is chosen in the app.
+//
+// @page requests landscape but deliberately does NOT name a paper size, so
+// whatever the user selects in the dialog is honoured.
+//
+// Fitting the Gantt is the one thing CSS can't do alone: bars are positioned in
+// absolute pixels, so the chart has to be scaled. Since the paper isn't known
+// until the dialog is open, a scale is emitted for each of the two sizes and
+// selected by a print media query on the page width:
+//
+//   letter landscape   11in - 0.7in margins = 10.3in ->  ~989px
+//   tabloid landscape  17in - 0.7in margins = 16.3in -> ~1565px
+//
+// If a browser doesn't evaluate the query, the letter rule applies and the chart
+// simply prints smaller than it could — it still fits, which is the safe failure.
+const PRINT_MARGIN_IN = 0.35;
+const PAGE_PX = {
+  letter: (11 - PRINT_MARGIN_IN * 2) * 96,
+  tabloid: (17 - PRINT_MARGIN_IN * 2) * 96,
+};
+const TABLOID_MIN_PX = 1200;   // between the two widths above
 
-  let scaleCss = '';
-  let restoreScroll = null;
-  if (kind === 'gantt') {
-    const inner = $('#ganttRoot .g-inner');
-    const scroller = $('#ganttRoot .g-scroll');
-    if (inner && scroller) {
-      const r = inner.getBoundingClientRect();
-      const contentW = r.width, contentH = r.height;
-      if (contentW > 0) {
-        // The chart auto-scrolls to "today" on screen. Printing clips to the
-        // container, so that offset would push the chart off the page — park it
-        // at the origin for the print run and restore it afterwards.
-        const prevLeft = scroller.scrollLeft, prevTop = scroller.scrollTop;
-        scroller.scrollLeft = 0; scroller.scrollTop = 0;
-        restoreScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
-        // Fill the printable width exactly (scaling up or down as needed).
-        const scale = Math.max(0.1, Math.min(4, pageWidthPx / contentW));
-        // Transform doesn't change layout size, so pin the container to the
-        // scaled box — otherwise the un-scaled width spills onto extra pages.
-        scaleCss = `@media print{
-          #ganttRoot .g-wrap{width:auto !important;overflow:visible !important}
-          #ganttRoot .g-scroll{width:${Math.ceil(contentW * scale)}px !important;height:${Math.ceil(contentH * scale)}px !important;overflow:hidden !important}
-          #ganttRoot .g-inner{transform:scale(${scale});transform-origin:top left}
-        }`;
-      }
-    }
+let restorePrintScroll = null;
+
+function ganttScaleCss() {
+  const inner = $('#ganttRoot .g-inner');
+  const scroller = $('#ganttRoot .g-scroll');
+  if (!inner || !scroller) return '';
+
+  const r = inner.getBoundingClientRect();
+  const contentW = r.width, contentH = r.height;
+  if (!(contentW > 0)) return '';
+
+  // The chart auto-scrolls to "today" on screen. Printing clips to the container,
+  // so that offset would push the chart off the page — park it at the origin for
+  // the print run and restore it afterwards.
+  const prevLeft = scroller.scrollLeft, prevTop = scroller.scrollTop;
+  scroller.scrollLeft = 0; scroller.scrollTop = 0;
+  restorePrintScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
+
+  // Never scale above 1: a small chart blown up to fill 11x17 looks crude, and
+  // legibility is already fine at natural size.
+  const box = (pageW) => {
+    const scale = Math.max(0.1, Math.min(1, pageW / contentW));
+    return { scale, w: Math.ceil(contentW * scale), h: Math.ceil(contentH * scale) };
+  };
+  const a = box(PAGE_PX.letter), b = box(PAGE_PX.tabloid);
+
+  // Transform doesn't change layout size, so the container is pinned to the
+  // scaled box — otherwise the un-scaled width spills onto extra pages.
+  return `@media print{
+    #ganttRoot .g-wrap{width:auto !important;overflow:visible !important}
+    #ganttRoot .g-scroll{width:${a.w}px !important;height:${a.h}px !important;
+      max-height:none !important;min-height:0 !important;overflow:hidden !important}
+    #ganttRoot .g-inner{transform:scale(${a.scale});transform-origin:top left}
   }
+  @media print and (min-width:${TABLOID_MIN_PX}px){
+    #ganttRoot .g-scroll{width:${b.w}px !important;height:${b.h}px !important}
+    #ganttRoot .g-inner{transform:scale(${b.scale})}
+  }`;
+}
+
+/**
+ * Called on beforeprint, so it applies however printing was started.
+ * Only the Gantt and Build Hours tabs get special treatment; on any other tab
+ * the page prints as it appears, like a normal web page.
+ */
+function preparePrint() {
+  const kind = state.tab === 'gantt' ? 'gantt' : state.tab === 'hours' ? 'hours' : null;
+  if (!kind) return;
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
-  style.textContent = `@page{size:${PAGE_CSS_NAME[paper] || 'letter'} ${landscape ? 'landscape' : 'portrait'};margin:${marginIn}in}\n${scaleCss}`;
+  style.textContent = `@page{size:landscape;margin:${PRINT_MARGIN_IN}in}\n` +
+    (kind === 'gantt' ? ganttScaleCss() : '');
 
   document.body.classList.add('printing', `printing-${kind}`);
-  const cleanup = () => {
-    document.body.classList.remove('printing', 'printing-hours', 'printing-gantt');
-    if (restoreScroll) { restoreScroll(); restoreScroll = null; }
-    window.removeEventListener('afterprint', cleanup);
-  };
-  window.addEventListener('afterprint', cleanup);
-  setTimeout(() => { window.print(); setTimeout(cleanup, 800); }, 60);
+}
+
+function cleanupPrint() {
+  document.body.classList.remove('printing', 'printing-hours', 'printing-gantt');
+  if (restorePrintScroll) { restorePrintScroll(); restorePrintScroll = null; }
 }
 
 function exportBuildHoursMatrix(rows) {
@@ -1996,14 +2019,13 @@ function wireReorder(rootSel) {
 }
 
 function wireGlobalEvents() {
-  // Print buttons (Build Hours + Gantt) — read the paper size chosen alongside.
+  // The Print button is a convenience only — it opens the browser's own dialog.
+  // beforeprint does the preparation, so Ctrl+P and the File menu behave identically.
   document.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-print]');
-    if (!btn) return;
-    const kind = btn.dataset.print;
-    const sel = document.querySelector(`[data-print-size="${kind}"]`);
-    printView(kind, sel ? sel.value : 'letter-landscape');
+    if (e.target.closest('[data-print]')) window.print();
   });
+  window.addEventListener('beforeprint', preparePrint);
+  window.addEventListener('afterprint', cleanupPrint);
   let textSaveTimer = null;
   $$('.tab').forEach((t) => t.addEventListener('click', () => { state.tab = t.dataset.tab; render(); }));
   $('#searchInput').addEventListener('input', (e) => { state.search = e.target.value; render(); });
