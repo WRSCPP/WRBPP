@@ -81,7 +81,15 @@ export async function renderAdminPanel() {
   if (!el) return;
 
   if (hasService === null) {
-    el.innerHTML = `<div class="card admin-card settings-card tile-clickable" data-tile="1"
+    el.innerHTML = `<div class="card admin-card"><h3>People &amp; Access</h3>
+      <p class="card-hint">Loading\u2026</p></div>`;
+    hasService = await serviceAvailable();
+  }
+  await loadPeople();
+
+  const pending = people.filter((p) => !p.confirmed || !p.lastSignInAt).length;
+
+  el.innerHTML = `<div class="card admin-card settings-card tile-clickable" data-tile="1"
       id="openPeople" role="button" tabindex="0"
       aria-label="Open People and Access">
     <div class="tile-head">
