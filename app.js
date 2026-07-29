@@ -1831,8 +1831,6 @@ function renderBuildModal() {
         const assignedAnywhere = new Set(Object.values(b.stageCrew || {}).flat().filter(Boolean));
         const pool = (state.settings.people || []).filter((p) => !assignedAnywhere.has(p.id));
         const chip = (p, sid) => `<span class="crew-chip assigned" draggable="true" data-crew-person="${p.id}" data-crew-from="${sid || ''}" title="${esc(p.role || '')} — drag to reassign">${esc(p.name)}<button type="button" class="crew-chip-x" data-crew-remove="${p.id}" data-crew-stage="${sid}" title="Unassign">✕</button></span>`;
-  // Fill in signed URLs for any private-bucket images this render produced.
-  hydrateSigned($('#buildModal'));
         return `
         <div class="crew-pool" data-crew-drop="__pool__">
           <div class="crew-lane-label">Available crew — by role</div>
@@ -1917,6 +1915,9 @@ function renderBuildModal() {
     <div class="modal-foot">${draft
       ? `<span class="draft-note">Unsaved — this build won't be added until you save.</span><button class="btn" data-cancel-draft>Cancel</button><button class="btn primary" data-save-build>Save build</button>`
       : `<button class="btn danger" data-delete-build>Delete build</button><button class="btn" data-close-build>Close</button>`}</div>`;
+  // Now that the markup is on the page, resolve signed URLs for any
+  // private-bucket images it produced.
+  hydrateSigned($('#buildModal'));
 }
 
 // ----------------------------- Mutations -----------------------------

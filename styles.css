@@ -861,3 +861,26 @@ body.readonly #adminPeopleRoot{display:none !important}
 .tile-clickable .tile-head{cursor:pointer}
 .tile-sub{font-size:13px;font-weight:600;margin-top:8px}
 .tile-note{font-size:11.5px;color:var(--text-muted);margin-top:2px}
+
+/* ---------- Gantt: freeze the date header ----------
+   position:sticky resolves against the nearest scroll container, so the header
+   can only freeze if the element that scrolls vertically is .g-scroll itself.
+   Previously the page scrolled and .g-scroll only scrolled horizontally, which
+   is why top:0 had nothing to stick to. Giving the chart its own viewport makes
+   it behave like a spreadsheet: header frozen on top, labels frozen at left
+   (.g-label already handles that axis). */
+.g-scroll{overflow:auto;max-height:calc(100vh - 250px);min-height:340px}
+.g-head{position:sticky;top:0;z-index:7;background:var(--card)}
+.g-head .ticks{background:var(--card)}
+
+@media (max-width:900px){
+  .g-scroll{max-height:calc(100vh - 210px);min-height:280px}
+}
+
+/* Printing lays the whole chart out flat, so nothing should be pinned. */
+@media print{
+  .g-scroll{max-height:none !important;min-height:0 !important;overflow:visible !important}
+  .g-head{position:static !important}
+}
+body.printing .g-head{position:static !important}
+body.printing .g-scroll{max-height:none !important;min-height:0 !important}
