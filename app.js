@@ -1058,22 +1058,6 @@ function ganttPrintNote() {
     : '';
 }
 
-/** The shop map is a fixed-width floor plan, so it scales like the Gantt. */
-function shopPrintCss() {
-  const map = $('#shopRoot .shop-map');
-  if (!map) return '';
-  const r = map.getBoundingClientRect();
-  if (!(r.width > 0)) return '';
-  const box = (pageW) => Math.max(0.1, Math.min(1, pageW / r.width));
-  return `@media print{
-    #shopRoot .shop-map-wrap{overflow:visible !important;max-height:none !important}
-    #shopRoot .shop-map{transform:scale(${box(PAGE_PX.letter)});transform-origin:top left}
-  }
-  @media print and (min-width:${TABLOID_MIN_PX}px){
-    #shopRoot .shop-map{transform:scale(${box(PAGE_PX.tabloid)})}
-  }`;
-}
-
 /**
  * Called on beforeprint, so it applies however printing was started.
  * Only the Gantt and Build Hours tabs get special treatment; on any other tab
@@ -1084,9 +1068,11 @@ function preparePrint() {
   const kind = PRINTABLE.includes(state.tab) ? state.tab : null;
   if (!kind) return;
 
+  // Only the Gantt needs measured scaling. Build Hours reflows as a table, and
+  // the shop map is already width:100% with a fixed aspect ratio, so print CSS
+  // alone makes it fill the page.
   let extra = '';
   if (kind === 'gantt') { extra = ganttPrintCss(); ganttPrintNote(); }
-  else if (kind === 'shop') extra = shopPrintCss();
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
@@ -1187,9 +1173,7 @@ function renderShopOverview() {
         ${overlays}
       </div>
     </div>
-    <div class="shop-line-labels">
-      ${lineMap.map(({ def, line }) => `<div class="shop-line-label"><strong>${def.label}</strong> → ${line ? esc(line.name) : '<span class="td-sub">unassigned line</span>'} · ${def.bays} bays</div>`).join('')}
-    </div>`;
+`;
 
   $('#shopRoot').querySelectorAll('[data-shop-bay]').forEach((cell) => {
     cell.addEventListener('click', () => {
