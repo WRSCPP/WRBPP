@@ -142,12 +142,25 @@ async function boot() {
     // app.js only ever renders into #headerStats — it never touches #authBox —
     // so one mount is enough. readonly.js re-enables auth controls on every
     // sweep, so the read-only pass can't lock the button out either.
+    // Both of these are supplementary UI. A failure in either must not take the
+    // whole application down — a broken admin panel should cost you the admin
+    // panel, not the schedule. Report it loudly in the console instead.
     if (globalThis.__TRAVELER_MOUNT_AUTH__) {
-      await globalThis.__TRAVELER_MOUNT_AUTH__();
+      try {
+        await globalThis.__TRAVELER_MOUNT_AUTH__();
+      } catch (err) {
+        console.error('Production Planner: the sign-in menu failed to load.', err);
+      }
     }
 
     if (globalThis.__TRAVELER_MOUNT_ADMIN__) {
-      await globalThis.__TRAVELER_MOUNT_ADMIN__();
+      try {
+        await globalThis.__TRAVELER_MOUNT_ADMIN__();
+      } catch (err) {
+        console.error('Production Planner: the People & Access panel failed to load. ' +
+          'The rest of the app is unaffected — check that admin-ui.js and admin-users.js ' +
+          'are both deployed and complete.', err);
+      }
     }
   } catch (err) {
     fatal('Something went wrong while starting up.', String(err && err.message || err));
