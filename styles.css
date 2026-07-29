@@ -783,7 +783,7 @@ body.readonly .g-bar,body.readonly .lc-build,body.readonly .td-name{cursor:point
 .auth-err{color:var(--clay);font-size:12.5px;font-weight:600;padding:8px 10px;background:color-mix(in srgb,var(--clay) 8%,var(--card));border:1px solid var(--clay);border-radius:var(--radius)}
 
 /* ---------- Admin: People & Access ---------- */
-.admin-card{margin-bottom:14px}
+
 .admin-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-top:12px}
 .admin-row{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--card);flex-wrap:wrap}
 .admin-row.is-me{background:color-mix(in srgb,var(--timber) 5%,var(--card))}
@@ -869,12 +869,12 @@ body.readonly #adminPeopleRoot{display:none !important}
    is why top:0 had nothing to stick to. Giving the chart its own viewport makes
    it behave like a spreadsheet: header frozen on top, labels frozen at left
    (.g-label already handles that axis). */
-.g-scroll{overflow:auto;max-height:calc(100vh - 250px);min-height:340px}
+.g-scroll{overflow:auto;max-height:calc(100vh - 300px);min-height:300px}
 .g-head{position:sticky;top:0;z-index:7;background:var(--card)}
 .g-head .ticks{background:var(--card)}
 
 @media (max-width:900px){
-  .g-scroll{max-height:calc(100vh - 210px);min-height:280px}
+  .g-scroll{max-height:calc(100vh - 260px);min-height:260px}
 }
 
 /* Printing lays the whole chart out flat, so nothing should be pinned. */
@@ -888,3 +888,21 @@ body.printing .g-scroll{max-height:none !important;min-height:0 !important}
 /* The removed paper-size picker carried margin-left:auto, which pushed the Print
    button to the right of the legend. Keep that alignment on the button itself. */
 .g-legend [data-print]{margin-left:auto}
+
+/* ---------- Settings: consolidated Export card ---------- */
+.export-row{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap}
+.export-row select{flex:1 1 190px;min-width:0;padding:6px 9px;font-size:13px}
+
+/* ---------- Gantt: out-of-window note (print only) ---------- */
+.g-print-note{display:none}
+@media print{
+  body.printing-gantt .g-print-note{display:block;margin-top:8pt;font-size:8pt;line-height:1.45;color:#000}
+}
+
+/* ---------- Shop Overview printing ---------- */
+@media print{
+  body.printing.printing-shop main > #view-shop{display:block !important}
+  body.printing-shop .shop-legend,
+  body.printing-shop .panel-sub{display:none !important}
+  body.printing-shop .shop-map-wrap{border:none !important}
+}

@@ -644,6 +644,8 @@ function renderGantt() {
         <div class="g-track" style="width:${chartW}px"><div class="g-nodate" data-open="${b.id}">Set a start date →</div></div></div>`;
     }
   }
+  // Geometry the print path needs to clip the timeline to a legible window.
+  state._gantt = { start, DAY, LABEL, chartW, totalDays };
   const todayX = LABEL + diffLocal(start, state.today) * DAY;
 
   $('#ganttRoot').innerHTML = `
@@ -825,7 +827,6 @@ function renderBuildHours() {
         ${moduleTypes.map((t) => `<option value="${esc(t)}" ${f.moduleType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
       </select></label>
       <input class="hf-search" type="search" placeholder="Search builds…" value="${esc(f.search)}" data-hours-filter="search">
-      <button class="btn sm" id="exportBuildHours">Export (.csv)</button>
       <button class="btn sm" data-print="hours">Print</button>
     </div>
     ${rows.length ? `<div class="hours-grid-wrap"><table class="hours-grid">
@@ -962,33 +963,62 @@ const TABLOID_MIN_PX = 1200;   // between the two widths above
 
 let restorePrintScroll = null;
 
-function ganttScaleCss() {
+// Printing the whole timeline is unreadable: at 16px/day a 290-day range is
+// ~4,900px, which scales to 0.20 on letter — 10px type becomes 2px. Legibility
+// needs a scale of roughly 0.6 or better, so the print clips to a forward window
+// instead of compressing everything.
+//
+// 13 weeks (91 days) = 91*16 + 234 label = 1,690px:
+//     letter landscape   989px page -> scale 0.59
+//     tabloid landscape 1565px page -> scale 0.93
+// One window that reads on both papers, which matters because the DOM is built
+// before the print dialog opens, so the chosen paper isn't knowable.
+const PRINT_WEEKS_BACK = 1;
+const PRINT_WEEKS_FORWARD = 12;
+
+function ganttPrintCss() {
+  const g = state._gantt;
   const inner = $('#ganttRoot .g-inner');
   const scroller = $('#ganttRoot .g-scroll');
-  if (!inner || !scroller) return '';
+  if (!g || !inner || !scroller) return '';
 
-  const r = inner.getBoundingClientRect();
-  const contentW = r.width, contentH = r.height;
-  if (!(contentW > 0)) return '';
+  const { start, DAY, LABEL, chartW } = g;
+  const winStart = addDaysLocal(state.today, -7 * PRINT_WEEKS_BACK);
+  const winDays = 7 * (PRINT_WEEKS_BACK + PRINT_WEEKS_FORWARD);
 
-  // The chart auto-scrolls to "today" on screen. Printing clips to the container,
-  // so that offset would push the chart off the page — park it at the origin for
-  // the print run and restore it afterwards.
+  // Clamp so the window can't run off either end of the rendered chart.
+  let offsetDays = Math.max(0, diffLocal(start, winStart));
+  const maxOffset = Math.max(0, Math.round(chartW / DAY) - winDays);
+  offsetDays = Math.min(offsetDays, maxOffset);
+  const offsetPx = offsetDays * DAY;
+  const windowPx = Math.min(chartW, winDays * DAY);
+  const totalW = LABEL + windowPx;
+
   const prevLeft = scroller.scrollLeft, prevTop = scroller.scrollTop;
   scroller.scrollLeft = 0; scroller.scrollTop = 0;
   restorePrintScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
 
-  // Never scale above 1: a small chart blown up to fill 11x17 looks crude, and
-  // legibility is already fine at natural size.
+  const h = inner.getBoundingClientRect().height;
   const box = (pageW) => {
-    const scale = Math.max(0.1, Math.min(1, pageW / contentW));
-    return { scale, w: Math.ceil(contentW * scale), h: Math.ceil(contentH * scale) };
+    const scale = Math.max(0.1, Math.min(1, pageW / totalW));
+    return { scale, w: Math.ceil(totalW * scale), h: Math.ceil(h * scale) };
   };
   const a = box(PAGE_PX.letter), b = box(PAGE_PX.tabloid);
 
-  // Transform doesn't change layout size, so the container is pinned to the
-  // scaled box — otherwise the un-scaled width spills onto extra pages.
+  // Shift the timeline left by the window offset and clip each row to the
+  // narrowed width. The label column is a separate flex child, so it stays put.
+  const shift = `
+    #ganttRoot .g-head .ticks,
+    #ganttRoot .g-gridlines,
+    #ganttRoot .g-row .g-track,
+    #ganttRoot .today{transform:translateX(-${offsetPx}px) !important}
+    #ganttRoot .g-inner{width:${totalW}px !important}
+    #ganttRoot .g-head,
+    #ganttRoot .g-row,
+    #ganttRoot .g-body{overflow:hidden !important}`;
+
   return `@media print{
+    ${shift}
     #ganttRoot .g-wrap{width:auto !important;overflow:visible !important}
     #ganttRoot .g-scroll{width:${a.w}px !important;height:${a.h}px !important;
       max-height:none !important;min-height:0 !important;overflow:hidden !important}
@@ -1001,24 +1031,72 @@ function ganttScaleCss() {
 }
 
 /**
+ * A print-only line naming builds that fall outside the printed window, so the
+ * long-range view is preserved as a note rather than 200 illegible columns.
+ */
+function ganttPrintNote() {
+  const g = state._gantt;
+  if (!g) return;
+  const cutoff = addDaysLocal(state.today, 7 * PRINT_WEEKS_FORWARD);
+  const proj = projections();
+  const later = filteredBuilds()
+    .filter((b) => b.status !== 'complete')
+    .map((b) => ({ b, p: proj[b.id] }))
+    .filter((x) => x.p && x.p.start > cutoff)
+    .sort((x, y) => (x.p.start < y.p.start ? -1 : 1));
+
+  let el = document.getElementById('ganttPrintNote');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ganttPrintNote';
+    el.className = 'g-print-note';
+    $('#ganttRoot')?.appendChild(el);
+  }
+  el.innerHTML = later.length
+    ? `<b>Starts after ${fmtDate(cutoff)}:</b> ` +
+      later.map((x) => `${esc(x.b.name)} (${fmtShort(x.p.start)})`).join(' \u00b7 ')
+    : '';
+}
+
+/** The shop map is a fixed-width floor plan, so it scales like the Gantt. */
+function shopPrintCss() {
+  const map = $('#shopRoot .shop-map');
+  if (!map) return '';
+  const r = map.getBoundingClientRect();
+  if (!(r.width > 0)) return '';
+  const box = (pageW) => Math.max(0.1, Math.min(1, pageW / r.width));
+  return `@media print{
+    #shopRoot .shop-map-wrap{overflow:visible !important;max-height:none !important}
+    #shopRoot .shop-map{transform:scale(${box(PAGE_PX.letter)});transform-origin:top left}
+  }
+  @media print and (min-width:${TABLOID_MIN_PX}px){
+    #shopRoot .shop-map{transform:scale(${box(PAGE_PX.tabloid)})}
+  }`;
+}
+
+/**
  * Called on beforeprint, so it applies however printing was started.
  * Only the Gantt and Build Hours tabs get special treatment; on any other tab
  * the page prints as it appears, like a normal web page.
  */
 function preparePrint() {
-  const kind = state.tab === 'gantt' ? 'gantt' : state.tab === 'hours' ? 'hours' : null;
+  const PRINTABLE = ['gantt', 'hours', 'shop'];
+  const kind = PRINTABLE.includes(state.tab) ? state.tab : null;
   if (!kind) return;
+
+  let extra = '';
+  if (kind === 'gantt') { extra = ganttPrintCss(); ganttPrintNote(); }
+  else if (kind === 'shop') extra = shopPrintCss();
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
-  style.textContent = `@page{size:landscape;margin:${PRINT_MARGIN_IN}in}\n` +
-    (kind === 'gantt' ? ganttScaleCss() : '');
+  style.textContent = `@page{size:landscape;margin:${PRINT_MARGIN_IN}in}\n` + extra;
 
   document.body.classList.add('printing', `printing-${kind}`);
 }
 
 function cleanupPrint() {
-  document.body.classList.remove('printing', 'printing-hours', 'printing-gantt');
+  document.body.classList.remove('printing', 'printing-hours', 'printing-gantt', 'printing-shop');
   if (restorePrintScroll) { restorePrintScroll(); restorePrintScroll = null; }
 }
 
@@ -1098,7 +1176,8 @@ function renderShopOverview() {
       <div><h2 class="rep-title">Shop Overview</h2>
       <p class="panel-sub" style="margin:4px 0 0">Live floor map — click a bay to open the build in it. Bays are numbered right-to-left.</p></div>
       <div class="shop-legend">${legendItems.map(([k, l]) => `<span class="lg"><i style="background:${riskMeta(k).color}"></i>${l}</span>`).join('')}
-        <span class="lg"><i class="shop-empty-swatch"></i>Open</span></div>
+        <span class="lg"><i class="shop-empty-swatch"></i>Open</span>
+        <button class="btn sm" data-print="shop">Print</button></div>
     </div>
     <div class="shop-map-wrap">
       <div class="shop-map">
@@ -1212,7 +1291,6 @@ function renderReports() {
     <div class="rep-head">
       <div><h2 class="rep-title">Production Analytics</h2>
       <p class="panel-sub">Decision metrics computed live from your build data. Metrics needing shipped-build history populate as builds complete with actual start/ship dates logged.</p></div>
-      <button class="btn sm" id="exportReport">Export report (.csv)</button>
     </div>
 
     <div class="kpi-row">
@@ -1287,7 +1365,6 @@ function renderReports() {
       <div class="rep-head" style="margin-bottom:8px">
         <div><h2>Build Hours</h2>
         <p class="panel-sub">Projected build hours vs. actual hours logged across production stages. Variance shows which builds are running over or under their hour budget.</p></div>
-        <button class="btn sm" id="exportHours">Export hours (.csv)</button>
       </div>
       ${(() => {
         const withHours = state.builds.filter((b) => (Number(b.projectedHours) || 0) > 0 || state.stages.some((s) => Number(b.stageHours?.[s.id]) || 0));
@@ -1319,7 +1396,6 @@ function renderReports() {
         <p class="panel-sub">A timestamped record of every build's journey — status changes, stage starts and completions, and shipping dates — captured automatically as you work.</p></div>
         <div class="rep-head-actions">
           <select id="historyFilter" class="search" style="min-width:180px"><option value="">All builds</option></select>
-          <button class="btn sm" id="exportHistory">Export history (.csv)</button>
         </div>
       </div>
       <div id="historyTimeline"><div class="td-sub">Loading history…</div></div>
@@ -1573,16 +1649,30 @@ function renderSettings() {
       </div><form class="add-row" data-add-opt="${cfg.key}"><input placeholder="Add…" required><button class="btn sm primary">Add</button></form></div>`;
   }).join('');
 
+  // Every export in one place, rather than a button buried in each tab.
+  const exportCard = `<div class="card settings-card">
+    <h3>Export</h3>
+    <p class="card-hint">Download planning data, or a full backup you keep yourself.</p>
+    <div class="export-row">
+      <select id="exportPick">
+        <option value="backup">Full backup (.json)</option>
+        <option value="hours-matrix">Build hours by stage (.csv)</option>
+        <option value="hours">Hours summary (.csv)</option>
+        <option value="report">Performance report (.csv)</option>
+        <option value="history">Change history (.csv)</option>
+      </select>
+      <button class="btn primary" id="exportGo">Download</button>
+    </div>
+  </div>`;
+
   $('#settingsRoot').innerHTML = `
     <p class="settings-intro">These lists drive every build's fields and the planning engine. Line capacity feeds overbooking detection; stages define the production sequence the scheduler walks. Changes save immediately and persist.</p>
     <div class="settings-actions">
-      <button class="btn" id="exportBtn">Export backup (.json)</button>
       <button class="btn" id="importBtn">Import backup</button>
       <input type="file" id="importFile" accept="application/json" hidden>
       <span class="td-sub" id="storageNote"></span>
     </div>
-    <div id="adminPeopleRoot"></div>
-    <div class="settings-grid">${lineCards}${peopleCard}${stageCard}${optCards}</div>`;
+    <div class="settings-grid"><div id="adminPeopleRoot"></div>${exportCard}${lineCards}${peopleCard}${stageCard}${optCards}</div>`;
   makeSettingsCollapsible();
   // Admins get the People & Access panel. The hook is only defined when main.js
   // loaded admin-ui.js, so this is a no-op for editors and viewers.
@@ -2469,7 +2559,19 @@ function wireGlobalEvents() {
         if (changed) await patchBuild(b.id, { stageCrew: next });
       }
     }
-    if (e.target.id === 'exportBtn') exportBackup();
+    if (e.target.id === 'exportGo') {
+      // Each export recomputes what it needs, since the data used to come from
+      // whichever tab hosted the button.
+      const pick = document.getElementById('exportPick')?.value;
+      if (pick === 'backup') exportBackup();
+      else if (pick === 'hours-matrix') exportBuildHoursMatrix(state.builds);
+      else if (pick === 'hours') exportHoursCSV();
+      else if (pick === 'report') {
+        exportReportCSV(buildReport(state.builds, state.lines, state.stages, calendar(), state.today));
+      } else if (pick === 'history') {
+        repo.historyEvents().then(exportHistoryCSV);
+      }
+    }
     if (e.target.id === 'importBtn') $('#importFile').click();
   });
   $('#settingsRoot').addEventListener('change', async (e) => {
