@@ -1874,7 +1874,7 @@ function renderBuildModal() {
   const inspPassed = inspections.filter((i) => inspOf(i) === 'passed').length;
 
   $('#buildModal').innerHTML = `
-    <div class="modal-head"><div><h2>${esc(b.name || 'Untitled Build')}</h2><div class="mono-sub">${esc(b.id)} · ${esc(b.client || 'No client')}</div></div>
+    <div class="modal-head"><div><h2>${esc(b.name || 'Untitled Build')}</h2><div class="mono-sub">${[b.moduleType, b.client || 'No client'].filter(Boolean).map(esc).join(' · ')}</div></div>
       <button class="ghost" data-close-build>✕</button></div>
     <div class="modal-tabs">
       <button class="modal-tab ${tab === 'details' ? 'active' : ''}" data-modal-tab="details">Details</button>
