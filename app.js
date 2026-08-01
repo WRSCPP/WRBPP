@@ -689,7 +689,7 @@ function renderBoard() {
         const done = state.stages.filter((s) => (b.stageProgress?.[s.id] || 0) >= 1).length;
         const bayLabel = b.bay ? ` · Bay ${esc(String(b.bay))}` : '';
         return `<div class="b-card" draggable="true" data-card="${b.id}" data-open="${b.id}">
-          <div class="b-card-top"><span class="b-id">${esc(b.id)}</span><span class="badge" style="background:${m.color}">${m.label}</span></div>
+          <div class="b-card-top"><span class="b-id">${esc(b.moduleType || '')}</span><span class="badge" style="background:${m.color}">${m.label}</span></div>
           <div class="b-name">${esc(b.name)}</div><div class="b-client">${esc(b.client || '')}</div>
           ${miniTimeline(b)}
           <div class="b-meta"><span>${esc(lineName(b.lineId))}${bayLabel}</span><span>${done}/${state.stages.length} stages</span></div>
