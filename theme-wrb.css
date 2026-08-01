@@ -51,12 +51,17 @@
   --saw:#9B6344;
   --saw-deep:#7E4F35;
 
-  /* --- semantic states, now drawn from the identity --- */
-  --pine:#848777;        /* on track  -> brand sage */
+  /* --- semantic states --- */
+  /* NOTE: on-track must be a true green and shipped a true blue. An earlier
+     draft tinted both toward the brand's warm neutrals, which made them
+     nearly identical on screen. Status colors have to stay distinguishable
+     at a glance — that outranks palette purity. */
+  --pine:#4F7C46;        /* on track  -> true green */
   --clay:#9B4A33;        /* behind    -> deepened clay */
   --amber:#B08637;       /* at risk   -> muted ochre */
   --timber:#8A7B6A;
-  --shipped:#7C7A72;     /* was a cool blue; now warm neutral */
+  --shipped:#3E6C8C;     /* shipped   -> slate blue */
+  --teal:#4F7C46;        /* alias used as the on-track fallback in app.js */
 
   --radius:3px;          /* squarer, matches the logo's hard edges */
 
@@ -248,3 +253,124 @@ table th{
    These need their own class inspection before I touch them, for the same
    reason this file overrides tokens instead of guessing at markup.
    ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+   11. MODULE TYPE LABEL
+   .b-id was styled for a generated ID. It now holds a word ("Modular"), so
+   it reads better as a small caps label than as a monospace code.
+   Pairs with PATCH-module-type.md.
+   --------------------------------------------------------------------------- */
+.b-id{
+  font-family:var(--display);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-faint);
+}
+
+/* ===========================================================================
+   SECOND PASS — drafting details
+   Everything below is CSS-only. No markup changed, no JS touched.
+   Wrapped in @media screen so printed travelers, Gantt and Build Hours
+   exports stay exactly as they are today.
+   =========================================================================== */
+@media screen {
+
+/* ---------------------------------------------------------------------------
+   12. DIMENSION-LINE PROGRESS BARS
+   The mini timeline becomes an architectural dimension line: squared rail,
+   tick terminals at each end, and a hard vertical tick where the fill stops —
+   the way a measured length is drawn on a shop drawing.
+   Targets .mtl-track / .mtl-bar, which had no pseudo-elements of their own.
+   --------------------------------------------------------------------------- */
+.mtl-track{
+  border-radius:0;
+  height:5px;
+  background:var(--paper-2);
+  border-left:1px solid var(--line-strong);
+  border-right:1px solid var(--line-strong);
+}
+/* end ticks — the little uprights that terminate a dimension line */
+.mtl-track::before,
+.mtl-track::after{
+  content:'';
+  position:absolute;
+  top:-4px;
+  width:1px;
+  height:13px;
+  background:var(--line-strong);
+  pointer-events:none;
+}
+.mtl-track::before{ left:-1px }
+.mtl-track::after { right:-1px }
+
+.mtl-bar{
+  border-radius:0;
+}
+/* hard terminal tick where the fill ends */
+.mtl-bar::after{
+  content:'';
+  position:absolute;
+  right:-1px;
+  top:-4px;
+  width:1px;
+  height:13px;
+  background:var(--ink);
+  opacity:.55;
+}
+
+/* dates read as drafting annotations */
+.mtl-dates{
+  font-family:var(--display);
+  font-size:8.5px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+
+/* ---------------------------------------------------------------------------
+   13. EMPTY STATES — elevation line-art
+   .empty is used in five places. The drawing is a background-image on a
+   pseudo-element, so no markup changes and the existing copy is untouched.
+   --------------------------------------------------------------------------- */
+.empty{
+  font-family:var(--body);
+  font-size:13px;
+  border:1px dashed var(--line-strong);
+  border-radius:2px;
+  padding:38px 44px 40px;
+}
+.empty::before{
+  content:'';
+  display:block;
+  width:150px;
+  height:64px;
+  margin:0 auto 16px;
+  opacity:.42;
+  background:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='150' height='64' fill='none' stroke='%239B6344' stroke-width='1.5' stroke-linejoin='round'>\
+<path d='M4 60V30l28-15 28 15v30'/><path d='M18 60V44h13v16'/><path d='M42 38h11v11H42z'/>\
+<path d='M84 60V24l30-16 30 16v36'/><path d='M100 60V42h15v18'/><path d='M124 34h12v12h-12z'/>\
+<path d='M0 60h150' stroke-width='1.7'/></svg>") center / contain no-repeat;
+}
+
+/* the small in-column board placeholder gets a lighter touch — a single unit */
+.b-empty{
+  font-family:var(--body);
+  font-style:italic;
+  font-size:11.5px;
+  padding:22px 16px;
+}
+.b-empty::before{
+  content:'';
+  display:block;
+  width:56px;
+  height:30px;
+  margin:0 auto 9px;
+  opacity:.34;
+  background:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' fill='none' stroke='%239B6344' stroke-width='1.5' stroke-linejoin='round'>\
+<path d='M3 27V13L20 4l17 9v14'/><path d='M13 27v-9h8v9'/><path d='M0 27h56' stroke-width='1.7'/></svg>") center / contain no-repeat;
+}
+
+} /* end @media screen */
