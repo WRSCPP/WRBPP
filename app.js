@@ -1740,7 +1740,7 @@ function updateModalDerived() {
   const h2 = $('#buildModal .modal-head h2');
   if (h2 && document.activeElement?.dataset?.field !== undefined) h2.textContent = b.name || 'Untitled Build';
   const sub = $('#buildModal .mono-sub');
-  if (sub) sub.textContent = `${b.id} · ${b.client || 'No client'}`;
+  if (sub) sub.textContent = [b.moduleType, b.client || 'No client'].filter(Boolean).join(' · ');
   // Forecast banner
   const banner = $('.forecast-banner');
   if (banner) {
