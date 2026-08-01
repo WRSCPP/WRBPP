@@ -1,0 +1,320 @@
+/* ============================================================================
+   PRODUCTION PLANNER — product theme
+   Requires wrb-design-system.css to be loaded FIRST.
+
+   In index.html, after styles.css:
+     <link rel="stylesheet" href="wrb-design-system.css">
+     <link rel="stylesheet" href="planner-theme.css">
+
+   To revert the entire redesign, delete both lines. Nothing else to undo.
+
+   THIS FILE DOES TWO JOBS
+     1. Maps Planner's legacy token names onto design-system tokens, so the
+        existing 398 var() references in styles.css pick up the brand
+        automatically without any of them being edited.
+     2. Applies brand treatments to Planner-specific classes (.tabbar, .brand,
+        .mtl-track, .b-id and so on) that the design system must not know about.
+
+   Anything added here that is NOT Planner-specific belongs upstream in
+   wrb-design-system.css instead.
+   ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+   1. LEGACY TOKEN MAP
+   styles.css speaks an older vocabulary — paper, saw, pine, timber. Rather
+   than rewrite 398 references, those names are re-pointed at design-system
+   tokens here. New work should use the --wrb-* names directly.
+   --------------------------------------------------------------------------- */
+:root{
+  --paper:var(--wrb-bone);
+  --paper-2:var(--wrb-bone-2);
+  --card:var(--wrb-white);
+  --surface-3:var(--wrb-bone-3);
+
+  --ink:var(--wrb-ink);
+  --ink-soft:var(--wrb-ink-soft);
+  --ink-faint:var(--wrb-ink-faint);
+
+  --line:var(--wrb-rule);
+  --line-strong:var(--wrb-rule-strong);
+
+  --saw:var(--wrb-clay);            /* was saw-orange; now brand clay */
+  --saw-deep:var(--wrb-clay-deep);
+
+  --pine:var(--wrb-ok);             /* on track  */
+  --amber:var(--wrb-warn);          /* at risk   */
+  --clay:var(--wrb-bad);            /* late      */
+  --shipped:var(--wrb-info);        /* shipped   */
+  --teal:var(--wrb-ok);             /* on-track fallback used in app.js */
+  --timber:var(--wrb-idle);
+
+  --radius:var(--wrb-radius-lg);
+
+  --display:var(--wrb-font);
+  --body:var(--wrb-font);
+  --mono:var(--wrb-font);           /* brand has no mono; tabular figures instead */
+}
+
+/* ---------------------------------------------------------------------------
+   2. HEADER — white bar so the full-colour logo sits on its own ground
+   Logo is applied as a background-image, so index.html needs no markup change.
+   Requires: assets/wrb-logo.png
+   --------------------------------------------------------------------------- */
+header{ background:var(--wrb-white); border-bottom:1px solid var(--wrb-rule) }
+
+.brand{ align-items:center; gap:14px; padding-left:0 }
+.brand::before{
+  content:'';
+  display:block;
+  width:96px; height:38px;
+  flex:none;
+  background:url('assets/wrb-logo.png') left center / contain no-repeat;
+}
+.brand h1{
+  font-family:var(--wrb-font);
+  font-weight:var(--wrb-weight-display);
+  font-size:17px;
+  letter-spacing:var(--wrb-track-label);
+  text-transform:uppercase;
+  color:var(--wrb-ink-faint);
+  border-left:1px solid var(--wrb-rule);
+  padding-left:14px;
+}
+.brand .sub{ display:none }   /* the logo already reads "Wind River Built" */
+
+/* ---------------------------------------------------------------------------
+   3. TABBAR — charcoal chrome, caps-and-rule treatment, roofline pitch
+   --------------------------------------------------------------------------- */
+.tabbar{
+  background:var(--wrb-charcoal);
+  border-bottom:0;
+  padding:0 26px;
+  position:relative;
+}
+.tabbar .tab{
+  background:transparent;
+  border:0;
+  color:#A9A49C;
+  font-family:var(--wrb-font);
+  font-size:10.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:var(--wrb-track-label);
+  text-transform:uppercase;
+  padding:14px 0 12px;
+  margin-right:28px;
+  position:relative;
+  cursor:pointer;
+}
+.tabbar .tab:last-child{ margin-right:0 }
+.tabbar .tab:hover{ color:#D6D2CB }
+.tabbar .tab.active{ color:#fff }
+.tabbar .tab.active::after{
+  content:'';
+  position:absolute; left:0; right:0; bottom:0;
+  height:2px;
+  background:var(--wrb-clay);
+}
+
+/* roofline pitch — motif from the design system, applied to Planner's nav */
+.tabbar::after{
+  content:'';
+  position:absolute;
+  left:0; right:0; bottom:-14px;
+  height:14px;
+  background:var(--wrb-charcoal);
+  clip-path:var(--wrb-roofline-clip);
+  pointer-events:none;
+  z-index:1;
+}
+
+/* ---------------------------------------------------------------------------
+   4. BUTTONS / TABLE HEADS / HEADINGS
+   --------------------------------------------------------------------------- */
+.btn{
+  font-family:var(--wrb-font);
+  font-size:10.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  border-radius:var(--wrb-radius);
+}
+.btn.primary{ background:var(--wrb-clay); border-color:var(--wrb-clay); color:#fff }
+.btn.primary:hover{ background:var(--wrb-clay-deep); border-color:var(--wrb-clay-deep) }
+
+table th{
+  font-family:var(--wrb-font);
+  font-size:9.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:var(--wrb-track-label);
+  text-transform:uppercase;
+  color:var(--wrb-ink-faint);
+  background:var(--wrb-bone-2);
+}
+
+.card > h2, .panel > h2, section.view > h2{
+  font-family:var(--wrb-font);
+  font-weight:var(--wrb-weight-display);
+  letter-spacing:-.015em;
+  text-transform:none;
+  color:var(--wrb-ink);
+}
+
+/* Module type label. .b-id was styled for a generated ID; it now holds a
+   word ("Modular"), so it reads as a label rather than a code. */
+.b-id{
+  font-family:var(--wrb-font);
+  font-size:9.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--wrb-ink-faint);
+}
+
+/* Admin panel — the few colours that escaped Planner's token system */
+.admin-msg.ok{ background:color-mix(in srgb, var(--wrb-sage) 14%, var(--wrb-white)); color:#4F5346 }
+.admin-st-warn{ color:#8A6529 }
+
+/* ===========================================================================
+   5. DECORATIVE LAYER
+   Screen only. Printed travelers, Gantt and Build Hours exports are untouched.
+   =========================================================================== */
+@media screen{
+
+/* -- Elevation watermark behind the filter bar -------------------------- */
+.filterbar{ position:relative; background:var(--wrb-white); border-bottom:1px solid var(--wrb-rule); overflow:hidden }
+.filterbar::after{
+  content:'';
+  position:absolute;
+  right:18px; bottom:-8px;
+  width:240px; height:78px;
+  opacity:.14;
+  pointer-events:none;
+  background:var(--wrb-elevation-wide) right bottom / contain no-repeat;
+}
+.filterbar > *{ position:relative; z-index:1 }
+
+/* -- Mini timeline as a dimension line ---------------------------------- *
+ * Planner's own markup (.mtl-track / .mtl-bar) receives the design system's
+ * dimension-line treatment. The existing today-marker and target flag are
+ * left alone and now read as drafting annotations.                        */
+.mtl-track{
+  border-radius:0;
+  height:5px;
+  background:var(--wrb-bone-2);
+  border-left:1px solid var(--wrb-rule-strong);
+  border-right:1px solid var(--wrb-rule-strong);
+}
+.mtl-track::before,
+.mtl-track::after{
+  content:'';
+  position:absolute;
+  top:-4px;
+  width:1px; height:13px;
+  background:var(--wrb-rule-strong);
+  pointer-events:none;
+}
+.mtl-track::before{ left:-1px }
+.mtl-track::after { right:-1px }
+
+.mtl-bar{ border-radius:0 }
+.mtl-bar::after{
+  content:'';
+  position:absolute;
+  right:-1px; top:-4px;
+  width:1px; height:13px;
+  background:var(--wrb-ink);
+  opacity:.55;
+}
+
+.mtl-dates{
+  font-family:var(--wrb-font);
+  font-size:8.5px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+
+/* -- Empty states -------------------------------------------------------- */
+.empty{
+  font-family:var(--wrb-font);
+  font-size:13px;
+  border:1px dashed var(--wrb-rule-strong);
+  border-radius:var(--wrb-radius);
+  padding:38px 44px 40px;
+}
+.empty::before{
+  content:'';
+  display:block;
+  width:150px; height:64px;
+  margin:0 auto 16px;
+  opacity:.42;
+  background:var(--wrb-elevation-pair) center / contain no-repeat;
+}
+
+.b-empty{
+  font-family:var(--wrb-font);
+  font-style:italic;
+  font-size:11.5px;
+  padding:22px 16px;
+}
+.b-empty::before{
+  content:'';
+  display:block;
+  width:56px; height:30px;
+  margin:0 auto 9px;
+  opacity:.34;
+  background:var(--wrb-elevation-single) center / contain no-repeat;
+}
+
+} /* end @media screen */
+
+/* ===========================================================================
+   6. INTERACTION STATES — Planner-specific application
+   The generic focus / disabled / motion rules live in wrb-design-system.css.
+   Only Planner's own hooks are handled here.
+   =========================================================================== */
+
+/* -- Locked controls (viewer tier) ---------------------------------------- *
+ * readonly.js sets `disabled` or `readOnly` on controls and tags each one
+ * with data-locked. Using the app's own hook keeps this consistent with
+ * however readonly.js evolves, rather than duplicating its logic in CSS.
+ *
+ * Note: Planner HIDES editing affordances outright for viewers (see the
+ * body.readonly block in styles.css). That is deliberate and left alone —
+ * this rule only covers controls that remain visible but are inert.
+ * ------------------------------------------------------------------------- */
+[data-locked]{
+  cursor:default;
+  background:var(--wrb-bone-2);
+  color:var(--wrb-ink-faint);
+  border-color:var(--wrb-rule);
+  box-shadow:none;
+}
+[data-locked]:hover{ background:var(--wrb-bone-2) }
+
+/* -- Focus ring contrast --------------------------------------------------- *
+ * .tile-head already had a :focus-visible outline, but drew it in --timber
+ * (warm gray) which is low contrast against the bone surface. Repointed at
+ * the focus colour so keyboard position is actually visible.
+ * ------------------------------------------------------------------------- */
+.tile-head:focus-visible{
+  outline:2px solid var(--wrb-focus);
+  outline-offset:3px;
+  border-radius:var(--wrb-radius);
+}
+
+/* -- Row and card hover ---------------------------------------------------- *
+ * Dense tables need a clear "which row am I on" cue, especially at 54 builds.
+ * ------------------------------------------------------------------------- */
+tbody tr:hover > td{ background:var(--wrb-hover-tint) }
+
+.b-card{ transition:box-shadow .12s ease, border-color .12s ease }
+.b-card:hover{
+  border-color:var(--wrb-rule-strong);
+  box-shadow:0 2px 6px rgba(57,57,58,.09);
+}
+.b-card:active{ box-shadow:0 1px 2px rgba(57,57,58,.12) }
+
+/* Gantt bars and clickable names already show a pointer; give them a hover
+   cue that does not rely on colour alone. */
+.g-bar:hover{ filter:brightness(1.06); box-shadow:0 2px 5px rgba(57,57,58,.18) }
+.td-name[data-open]:hover{ text-decoration:underline; text-underline-offset:2px }

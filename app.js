@@ -689,7 +689,7 @@ function renderBoard() {
         const done = state.stages.filter((s) => (b.stageProgress?.[s.id] || 0) >= 1).length;
         const bayLabel = b.bay ? ` · Bay ${esc(String(b.bay))}` : '';
         return `<div class="b-card" draggable="true" data-card="${b.id}" data-open="${b.id}">
-          <div class="b-card-top"><span class="b-id">${esc(b.id)}</span><span class="badge" style="background:${m.color}">${m.label}</span></div>
+          <div class="b-card-top"><span class="b-id">${esc(b.moduleType || '')}</span><span class="badge" style="background:${m.color}">${m.label}</span></div>
           <div class="b-name">${esc(b.name)}</div><div class="b-client">${esc(b.client || '')}</div>
           ${miniTimeline(b)}
           <div class="b-meta"><span>${esc(lineName(b.lineId))}${bayLabel}</span><span>${done}/${state.stages.length} stages</span></div>
@@ -1240,7 +1240,7 @@ function renderPipeline() {
             : null;
           const stColor = b.status === 'confirmed' ? 'var(--pine)' : 'var(--text-dim)';
           return `<tr>
-            <td class="td-name" data-open="${b.id}">${esc(b.name)}<span class="td-sub">${esc(b.id)} · ${esc(b.client || '')}</span></td>
+            <td class="td-name" data-open="${b.id}">${esc(b.name)}<span class="td-sub">${[b.moduleType, b.client].filter(Boolean).map(esc).join(' · ')}</span></td>
             <td><span class="status-pill" style="color:${stColor};border-color:${stColor}">${esc(b.status)}</span></td>
             <td>${esc(lineName(b.lineId))}</td>
             <td>${fmtDate(b.tentativeStart)}</td>
@@ -1740,7 +1740,7 @@ function updateModalDerived() {
   const h2 = $('#buildModal .modal-head h2');
   if (h2 && document.activeElement?.dataset?.field !== undefined) h2.textContent = b.name || 'Untitled Build';
   const sub = $('#buildModal .mono-sub');
-  if (sub) sub.textContent = `${b.id} · ${b.client || 'No client'}`;
+  if (sub) sub.textContent = [b.moduleType, b.client || 'No client'].filter(Boolean).join(' · ');
   // Forecast banner
   const banner = $('.forecast-banner');
   if (banner) {
@@ -1874,7 +1874,7 @@ function renderBuildModal() {
   const inspPassed = inspections.filter((i) => inspOf(i) === 'passed').length;
 
   $('#buildModal').innerHTML = `
-    <div class="modal-head"><div><h2>${esc(b.name || 'Untitled Build')}</h2><div class="mono-sub">${esc(b.id)} · ${esc(b.client || 'No client')}</div></div>
+    <div class="modal-head"><div><h2>${esc(b.name || 'Untitled Build')}</h2><div class="mono-sub">${[b.moduleType, b.client || 'No client'].filter(Boolean).map(esc).join(' · ')}</div></div>
       <button class="ghost" data-close-build>✕</button></div>
     <div class="modal-tabs">
       <button class="modal-tab ${tab === 'details' ? 'active' : ''}" data-modal-tab="details">Details</button>
