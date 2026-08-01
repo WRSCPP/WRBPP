@@ -1,3 +1,4 @@
+console.log('%c[app.js] BUILD 2026-08-01-B — moduleType patch ACTIVE','background:#4F7C46;color:#fff;padding:2px 8px;border-radius:3px;font-weight:700');
 /**
  * Traveler application controller.
  * Wires the planning engine and persistence layer into the UI.
