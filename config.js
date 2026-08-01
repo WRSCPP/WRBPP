@@ -16,7 +16,7 @@
 // included schema.sql turns on. Never put a service_role key in this file.
 
 export const CONFIG = {
-  MODE: 'cloud',
+  MODE: 'local',
 
   // --- 'static' (read-only) settings ---
   // Path to the exported data snapshot, relative to index.html.
