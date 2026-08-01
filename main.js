@@ -130,7 +130,7 @@ async function boot() {
     }
     // 'local' needs no setup — store.js falls through to IndexedDB.
 
-    await import('./app.js?v=' + Date.now());
+    await import('./app.js');
 
     // Lock the UI down once the app has rendered its first pass.
     if (document.body.classList.contains('readonly')) {
