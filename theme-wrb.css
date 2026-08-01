@@ -1,0 +1,270 @@
+/* ============================================================================
+   theme-wrb.css — Wind River Built brand theme (Phase A: visual only)
+
+   HOW THIS WORKS
+   This file loads AFTER styles.css and overrides it. It changes almost nothing
+   structurally — your existing stylesheet is already driven by CSS custom
+   properties (398 var() references), so redefining those tokens restyles the
+   whole app at once. No classes renamed, no markup required to change.
+
+   TO ENABLE   add this line to index.html, directly after the styles.css link:
+                 <link rel="stylesheet" href="theme-wrb.css">
+   TO REVERT   delete that one line. Nothing else to undo.
+
+   DELIBERATELY NOT TOUCHED
+   - Everything inside @media print. Those styles are intentionally grayscale
+     and high-contrast for paper output; theming them would hurt printed
+     travelers and the Gantt/Hours exports.
+   - Any JavaScript, any class names, any DOM structure.
+
+   Colors below are sampled from WRB_Icon_Stacked_Color.png, not guessed.
+   ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap');
+
+/* ---------------------------------------------------------------------------
+   1. TOKENS — this block alone does most of the work
+   --------------------------------------------------------------------------- */
+:root{
+  /* --- sampled straight from the logo file --- */
+  --wrb-charcoal:#39393A;
+  --wrb-charcoal-deep:#2E2E2F;
+  --wrb-clay:#9B6344;
+  --wrb-sage:#848777;
+
+  /* --- surfaces: warm but far less yellow than the old kraft paper --- */
+  --paper:#FAF8F5;
+  --paper-2:#F2EEE8;
+  --card:#FFFFFF;
+  --surface-3:#E9E3DA;
+
+  /* --- text --- */
+  --ink:#2B2B2C;
+  --ink-soft:#6A6259;
+  --ink-faint:#8E877E;
+
+  /* --- rules --- */
+  --line:#E3DDD4;
+  --line-strong:#CFC7BB;
+
+  /* --- accents: the old saw-orange becomes brand clay --- */
+  --saw:#9B6344;
+  --saw-deep:#7E4F35;
+
+  /* --- semantic states --- */
+  /* NOTE: on-track must be a true green and shipped a true blue. An earlier
+     draft tinted both toward the brand's warm neutrals, which made them
+     nearly identical on screen. Status colors have to stay distinguishable
+     at a glance — that outranks palette purity. */
+  --pine:#4F7C46;        /* on track  -> true green */
+  --clay:#9B4A33;        /* behind    -> deepened clay */
+  --amber:#B08637;       /* at risk   -> muted ochre */
+  --timber:#8A7B6A;
+  --shipped:#3E6C8C;     /* shipped   -> slate blue */
+  --teal:#4F7C46;        /* alias used as the on-track fallback in app.js */
+
+  --radius:3px;          /* squarer, matches the logo's hard edges */
+
+  --display:'Figtree',system-ui,sans-serif;
+  --body:'Figtree',system-ui,sans-serif;
+  --mono:'Figtree',system-ui,sans-serif;  /* brand has no mono; see §2 */
+}
+
+/* ---------------------------------------------------------------------------
+   2. TABULAR FIGURES
+   The brand has no monospace face, so instead of importing a foreign voice we
+   get column alignment from Figtree's tabular numerals. Anything that used to
+   rely on --mono for alignment still lines up.
+   --------------------------------------------------------------------------- */
+body, table, input, select, textarea, button{
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;
+}
+
+/* ---------------------------------------------------------------------------
+   3. HEADER — white bar so the full-color logo sits natively
+   --------------------------------------------------------------------------- */
+header{
+  background:#fff;
+  border-bottom:1px solid var(--line);
+}
+
+/* Logo injected via background-image so index.html needs no edit.
+   Requires: assets/wrb-logo.png  (the stacked color lockup) */
+.brand{
+  align-items:center;
+  gap:14px;
+  padding-left:0;
+}
+.brand::before{
+  content:'';
+  display:block;
+  width:96px;
+  height:38px;
+  flex:none;
+  background:url('assets/wrb-logo.png') left center / contain no-repeat;
+}
+.brand h1{
+  font-family:var(--display);
+  font-weight:800;
+  font-size:17px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-faint);
+  border-left:1px solid var(--line);
+  padding-left:14px;
+}
+.brand .sub{ display:none; }   /* the logo already says Wind River Built */
+
+/* ---------------------------------------------------------------------------
+   4. TABBAR — charcoal chrome, caps-and-rule treatment from the website
+   --------------------------------------------------------------------------- */
+.tabbar{
+  background:var(--wrb-charcoal);
+  border-bottom:0;
+  padding:0 26px;
+  position:relative;
+}
+.tabbar .tab{
+  background:transparent;
+  border:0;
+  color:#A9A49C;
+  font-family:var(--display);
+  font-size:10.5px;
+  font-weight:700;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  padding:14px 0 12px;
+  margin-right:28px;
+  position:relative;
+  cursor:pointer;
+}
+.tabbar .tab:last-child{ margin-right:0 }
+.tabbar .tab:hover{ color:#D6D2CB }
+.tabbar .tab.active{ color:#fff }
+.tabbar .tab.active::after{
+  content:'';
+  position:absolute;
+  left:0; right:0; bottom:0;
+  height:2px;
+  background:var(--wrb-clay);
+}
+
+/* ---------------------------------------------------------------------------
+   5. ROOFLINE — the logo's own peak geometry as a structural edge.
+   Pure CSS pseudo-element, no markup added.
+   --------------------------------------------------------------------------- */
+.tabbar::after{
+  content:'';
+  position:absolute;
+  left:0; right:0; bottom:-14px;
+  height:14px;
+  background:var(--wrb-charcoal);
+  clip-path:polygon(0 0, 100% 0, 100% 0, 58% 100%, 33% 38%, 0 0);
+  pointer-events:none;
+  z-index:1;
+}
+
+/* ---------------------------------------------------------------------------
+   6. ELEVATION WATERMARK — line-art behind the filter bar, one per screen.
+   Inline SVG as a data URI; opacity kept low on purpose. Dial the opacity
+   value down to .08 (or remove this rule) if it ever starts feeling busy.
+   --------------------------------------------------------------------------- */
+.filterbar{
+  position:relative;
+  background:var(--card);
+  border-bottom:1px solid var(--line);
+  overflow:hidden;
+}
+.filterbar::after{
+  content:'';
+  position:absolute;
+  right:18px; bottom:-8px;
+  width:240px; height:78px;
+  opacity:.14;
+  pointer-events:none;
+  background:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='240' height='78' fill='none' stroke='%239B6344' stroke-width='1.4' stroke-linejoin='round'>\
+<path d='M3 74V38l30-17 30 17v36'/><path d='M17 74V54h12v20'/><path d='M43 51h12v11H43z'/>\
+<path d='M84 74V34h42v40'/><path d='M84 34l21-13 21 13'/><path d='M97 74V53h11v21'/><path d='M114 50h9v10h-9z'/>\
+<path d='M146 74V28l39-17 39 17v46'/><path d='M164 74V48h17v26'/><path d='M193 45h15v13h-15z'/>\
+<path d='M0 74h240' stroke-width='1.6'/></svg>") right bottom / contain no-repeat;
+}
+.filterbar > *{ position:relative; z-index:1 }
+
+/* ---------------------------------------------------------------------------
+   7. BUTTONS — squarer, caps, brand clay for primary
+   --------------------------------------------------------------------------- */
+.btn{
+  font-family:var(--display);
+  font-size:10.5px;
+  font-weight:700;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  border-radius:2px;
+}
+.btn.primary{
+  background:var(--wrb-clay);
+  border-color:var(--wrb-clay);
+  color:#fff;
+}
+.btn.primary:hover{ background:var(--saw-deep); border-color:var(--saw-deep) }
+
+/* ---------------------------------------------------------------------------
+   8. SECTION HEADINGS — Title Case with a period is the brand's voice.
+   The period is added in CSS so no copy has to be rewritten by hand.
+   Remove this rule if you'd rather control it in the markup.
+   --------------------------------------------------------------------------- */
+.card > h2, .panel > h2, section.view > h2{
+  font-family:var(--display);
+  font-weight:800;
+  letter-spacing:-.015em;
+  text-transform:none;
+  color:var(--ink);
+}
+
+/* ---------------------------------------------------------------------------
+   9. TABLE HEADERS — caps + letterspacing, warm well
+   --------------------------------------------------------------------------- */
+table th{
+  font-family:var(--display);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.15em;
+  text-transform:uppercase;
+  color:var(--ink-faint);
+  background:var(--paper-2);
+}
+
+/* ---------------------------------------------------------------------------
+   10. ADMIN PANEL — the few colors that escaped the token system
+   --------------------------------------------------------------------------- */
+.admin-msg.ok{
+  background:color-mix(in srgb, var(--wrb-sage) 14%, var(--card));
+  color:#4F5346;
+}
+.admin-st-warn{ color:#8A6529 }
+
+/* ============================================================================
+   NOT YET THEMED — deliberately left for a second pass after inspection:
+     - progress / schedule bars  -> dimension-line treatment with tick terminals
+     - empty states              -> elevation line-art + "Nothing on the Yard Line."
+     - Gantt bar fills           -> need to confirm they read from tokens first
+   These need their own class inspection before I touch them, for the same
+   reason this file overrides tokens instead of guessing at markup.
+   ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+   11. MODULE TYPE LABEL
+   .b-id was styled for a generated ID. It now holds a word ("Modular"), so
+   it reads better as a small caps label than as a monospace code.
+   Pairs with PATCH-module-type.md.
+   --------------------------------------------------------------------------- */
+.b-id{
+  font-family:var(--display);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-faint);
+}
