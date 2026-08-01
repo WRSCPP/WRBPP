@@ -1240,7 +1240,7 @@ function renderPipeline() {
             : null;
           const stColor = b.status === 'confirmed' ? 'var(--pine)' : 'var(--text-dim)';
           return `<tr>
-            <td class="td-name" data-open="${b.id}">${esc(b.name)}<span class="td-sub">${esc(b.id)} · ${esc(b.client || '')}</span></td>
+            <td class="td-name" data-open="${b.id}">${esc(b.name)}<span class="td-sub">${[b.moduleType, b.client].filter(Boolean).map(esc).join(' · ')}</span></td>
             <td><span class="status-pill" style="color:${stColor};border-color:${stColor}">${esc(b.status)}</span></td>
             <td>${esc(lineName(b.lineId))}</td>
             <td>${fmtDate(b.tentativeStart)}</td>
