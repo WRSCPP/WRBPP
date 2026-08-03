@@ -350,6 +350,16 @@ function bayOptions(build) {
   if (isLong) {
     html += `<option value="sf" ${String(build.bay) === 'sf' ? 'selected' : ''}>Spray Foam</option>`;
   }
+  // Named one-off bays (e.g. Trailer) belong to whichever line owns them, so they
+  // only appear for that line — otherwise a build could be parked in a bay that
+  // isn't drawn anywhere near its own line.
+  for (const x of SHOP_EXTRA_BAYS) {
+    const owner = SHOP_LINES.find((d) => d.key === x.lineKey);
+    const belongs = line && owner && owner.match.some((m) => (line.name || '').toLowerCase().includes(m) || line.id.toLowerCase().includes(m));
+    if (belongs) {
+      html += `<option value="${x.id}" ${String(build.bay) === x.id ? 'selected' : ''}>${esc(x.title)}</option>`;
+    }
+  }
   return html;
 }
 
@@ -779,6 +789,31 @@ const SHOP_LINES = [
 const LONG_LINE = SHOP_LINES.find((d) => d.key === 'long');
 const UNIFORM_BAY_WIDTH = (LONG_LINE.region.right - LONG_LINE.region.left) / LONG_LINE.bays;
 
+// One-off bays that sit over a specific object on the drawing rather than being
+// part of a numbered production line.
+//
+// `lineKey` says which SHOP_LINES entry the bay belongs to: it inherits that
+// line's vertical extent and band treatment, takes UNIFORM_BAY_WIDTH like every
+// other bay, and sits immediately outboard of Bay 1 — so it reads as part of the
+// row rather than a floating box, and clicking it offers that line's build
+// picker. A first attempt sized this to the trailer's own 29px outline, which
+// technically covered the object but left a cell too narrow to hold a build name.
+const SHOP_EXTRA_BAYS = [
+  {
+    id: 'trailer',
+    label: 'TR',
+    title: 'Trailer',
+    modifier: 'trailer-bay',
+    lineKey: 'short',
+    // The trailer is drawn at x 946-975, y 378-489 of the 1096x532 source image.
+    // A standard-width bay butted against Bay 1 spans 83.76%-90.019% (918-987px),
+    // which contains it with room either side and still clears the building wall
+    // at x 992. bandTopExtra matches the Short Line's own value so the masking
+    // band reaches above the trailer's top edge instead of letting it peek out.
+    bandTopExtra: 3.4,
+  },
+];
+
 function resolveShopLine(def, usedIds) {
   // Match a user line by name keywords; otherwise fall back to line order.
   const byName = state.lines.find((l) => !usedIds.has(l.id) && def.match.some((m) => (l.name || '').toLowerCase().includes(m) || l.id.toLowerCase().includes(m)));
@@ -834,6 +869,21 @@ function renderBuildHours() {
   const grandActual = rows.reduce((s, b) => s + actualOf(b), 0);
   const grandGoal = rows.reduce((s, b) => s + (Number(b.projectedHours) || 0), 0);
 
+  // Column averages. The denominator is the number of builds that actually have
+  // hours logged in that stage, NOT rows.length. A build in progress holds 0 for
+  // every stage it has not reached yet, so dividing by every row would drag a
+  // late-stage average toward zero and misreport how long that stage really
+  // takes — the opposite of useful for planning. Each cell's tooltip states the
+  // denominator it used so the number is never ambiguous.
+  const colCounts = stages.map((st) => rows.filter((b) => (Number(b.stageHours?.[st.id]) || 0) > 0).length);
+  const colAverages = colTotals.map((t, i) => (colCounts[i] ? t / colCounts[i] : null));
+  const nWithHours = rows.filter((b) => actualOf(b) > 0).length;
+  const nWithGoal = rows.filter((b) => (Number(b.projectedHours) || 0) > 0).length;
+  const avgActual = nWithHours ? grandActual / nWithHours : null;
+  const avgGoal = nWithGoal ? grandGoal / nWithGoal : null;
+  // Hours are entered in steps of 0.5, so one decimal is the useful precision.
+  const fmtAvg = (n) => (n === null ? '' : String(Math.round(n * 10) / 10));
+
   const moduleTypes = state.settings.moduleTypes || [];
 
   const cw = state.hoursColWidths || {};
@@ -874,6 +924,19 @@ function renderBuildHours() {
     <td class="bh-status"></td>
   </tr>`;
 
+  const avgVar = (avgActual !== null && avgGoal !== null) ? avgActual - avgGoal : null;
+  const avgVarTone = avgVar === null ? '' : avgVar > 0 ? 'over' : avgVar < 0 ? 'under' : 'even';
+  const averagesRow = `<tr class="bh-avg-row">
+    <td class="bh-name" style="${wStyle('name')}" title="Average hours per build that has hours logged in that stage. Builds with nothing logged in a stage are left out of that stage's average, so a late stage isn't dragged toward zero by builds that haven't reached it yet.">Average</td>
+    ${colAverages.map((a, i) => `<td class="bh-avg-cell" title="${colCounts[i] ? `${colTotals[i]} h ÷ ${colCounts[i]} build${colCounts[i] === 1 ? '' : 's'} with hours logged` : 'Nothing logged in this stage yet'}">${fmtAvg(a)}</td>`).join('')}
+    <td class="bh-total" title="${nWithHours ? `${grandActual} h ÷ ${nWithHours} build${nWithHours === 1 ? '' : 's'} with hours logged` : 'Nothing logged yet'}">${fmtAvg(avgActual)}</td>
+    <td class="bh-goal" title="${nWithGoal ? `${grandGoal} h ÷ ${nWithGoal} build${nWithGoal === 1 ? '' : 's'} with a goal set` : 'No goals set'}">${fmtAvg(avgGoal)}</td>
+    <td class="bh-var ${avgVarTone}">${avgVar === null ? '—' : `${avgVar > 0 ? '+' : ''}${fmtAvg(avgVar)}`}</td>
+    <td class="bh-updated"></td>
+    <td class="bh-target"></td>
+    <td class="bh-status"></td>
+  </tr>`;
+
   $('#hoursRoot').innerHTML = `
     <div class="hours-head">
       <div><h2 class="rep-title">Build Hours</h2>
@@ -898,7 +961,7 @@ function renderBuildHours() {
     </div>
     ${rows.length ? `<div class="hours-grid-wrap"><table class="hours-grid">
       <thead><tr data-reorder="stages"><th class="bh-name-head" data-col="name" style="${wStyle('name')}">Build<span class="col-resize" data-resize="name"></span></th>${headCells}<th class="bh-total-head">Total</th><th class="bh-goal-head">Goal</th><th class="bh-var-head">Var</th><th class="bh-updated-head">Updated</th><th class="bh-target-head">Target Ship</th><th class="bh-status-head">Status</th></tr></thead>
-      <tbody>${bodyRows}${totalsRow}</tbody>
+      <tbody>${bodyRows}${totalsRow}${averagesRow}</tbody>
     </table></div>` : '<div class="empty">No builds match these filters.</div>'}`;
 
   // Filter change handlers.
@@ -940,6 +1003,7 @@ function renderBuildHours() {
   $('#exportBuildHours')?.addEventListener('click', () => exportBuildHoursMatrix(rows));
   wireReorder('#hoursRoot');
   wireColumnResize();
+  setSummaryRowOffset();
 }
 
 // Drag the thin handle on a column header's right edge to resize that column.
@@ -996,6 +1060,87 @@ function updateHoursRowLive(inp) {
   // Refresh the "updated" cell to today.
   const updCell = tr.querySelector('.bh-updated');
   if (updCell) updCell.textContent = fmtDate(state.today);
+  updateHoursSummaryRows();
+}
+
+// Recompute the Totals and Average rows straight from the inputs. Editing a cell
+// only re-renders that one row (so the caret stays put while tabbing across the
+// grid), which previously left the Totals row stale until something forced a full
+// re-render. Both summary rows are now refreshed on every edit.
+function updateHoursSummaryRows() {
+  const table = $('#hoursRoot .hours-grid');
+  if (!table) return;
+  const bodyRows = [...table.querySelectorAll('tbody tr')]
+    .filter((tr) => !tr.classList.contains('bh-totals-row') && !tr.classList.contains('bh-avg-row'));
+  if (!bodyRows.length) return;
+
+  // Column-by-column: sum, and count only the builds with something logged.
+  const stageCount = bodyRows[0].querySelectorAll('[data-hours-build]').length;
+  const sums = new Array(stageCount).fill(0);
+  const counts = new Array(stageCount).fill(0);
+  let grandActual = 0, grandGoal = 0, nWithHours = 0, nWithGoal = 0;
+
+  for (const tr of bodyRows) {
+    const inputs = tr.querySelectorAll('[data-hours-build]');
+    let rowActual = 0;
+    inputs.forEach((el, i) => {
+      const v = Number(el.value) || 0;
+      rowActual += v;
+      if (i < stageCount) { sums[i] += v; if (v > 0) counts[i] += 1; }
+    });
+    grandActual += rowActual;
+    if (rowActual > 0) nWithHours += 1;
+    const goal = Number(tr.querySelector('[data-goal-build]')?.value) || 0;
+    grandGoal += goal;
+    if (goal > 0) nWithGoal += 1;
+  }
+
+  const round1 = (n) => Math.round(n * 10) / 10;
+  const setVar = (cell, value, tone) => {
+    if (!cell) return;
+    cell.textContent = value;
+    cell.className = `bh-var ${tone}`;
+  };
+
+  const totalsRow = table.querySelector('tbody tr.bh-totals-row');
+  if (totalsRow) {
+    totalsRow.querySelectorAll('.bh-total-cell').forEach((td, i) => { td.textContent = sums[i] || ''; });
+    const t = totalsRow.querySelector('.bh-total'); if (t) t.textContent = grandActual || 0;
+    const g = totalsRow.querySelector('.bh-goal'); if (g) g.textContent = grandGoal || 0;
+    const v = grandActual - grandGoal;
+    setVar(totalsRow.querySelector('.bh-var'),
+      grandGoal ? `${v > 0 ? '+' : ''}${v}` : '—',
+      grandGoal ? (v > 0 ? 'over' : v < 0 ? 'under' : 'even') : '');
+  }
+
+  const avgRow = table.querySelector('tbody tr.bh-avg-row');
+  if (avgRow) {
+    avgRow.querySelectorAll('.bh-avg-cell').forEach((td, i) => {
+      td.textContent = counts[i] ? String(round1(sums[i] / counts[i])) : '';
+      td.title = counts[i]
+        ? `${sums[i]} h ÷ ${counts[i]} build${counts[i] === 1 ? '' : 's'} with hours logged`
+        : 'Nothing logged in this stage yet';
+    });
+    const avgActual = nWithHours ? grandActual / nWithHours : null;
+    const avgGoal = nWithGoal ? grandGoal / nWithGoal : null;
+    const t = avgRow.querySelector('.bh-total'); if (t) t.textContent = avgActual === null ? '' : String(round1(avgActual));
+    const g = avgRow.querySelector('.bh-goal'); if (g) g.textContent = avgGoal === null ? '' : String(round1(avgGoal));
+    const av = (avgActual !== null && avgGoal !== null) ? avgActual - avgGoal : null;
+    setVar(avgRow.querySelector('.bh-var'),
+      av === null ? '—' : `${av > 0 ? '+' : ''}${round1(av)}`,
+      av === null ? '' : av > 0 ? 'over' : av < 0 ? 'under' : 'even');
+  }
+}
+
+// Totals and Average are both pinned to the bottom of the scroll area, so Totals
+// must sit exactly one Average-row height above the floor. Measure it rather than
+// hardcoding, since row height moves with font size and browser zoom.
+function setSummaryRowOffset() {
+  const root = $('#hoursRoot');
+  const avgRow = root?.querySelector('.hours-grid tbody tr.bh-avg-row');
+  if (!root || !avgRow) return;
+  const h = Math.round(avgRow.getBoundingClientRect().height);
+  if (h > 0) root.style.setProperty('--bh-avg-h', `${h}px`);
 }
 
 // Export the filtered matrix (builds × stages) to CSV, mirroring the sheet layout.
@@ -1226,6 +1371,35 @@ function renderShopOverview() {
     return band + cells;
   }).join('');
 
+  // Extra one-off bays, rendered with the same markup and classes as line bays so
+  // they pick up identical styling, hover, occupancy colours and click handling.
+  // Geometry is derived from the owning line: standard bay width, that line's
+  // vertical extent, butted immediately outboard of Bay 1.
+  const extraBays = SHOP_EXTRA_BAYS.map((x) => {
+    const owner = lineMap.find(({ def }) => def.key === x.lineKey);
+    if (!owner) return '';
+    const line = owner.line;
+    const r = owner.def.region;
+    const left = r.right;
+    const width = UNIFORM_BAY_WIDTH;
+    const top = r.top;
+    const height = r.bottom - r.top;
+    const build = line ? state.builds.find((b) => b.lineId === line.id && String(b.bay) === String(x.id) && b.status !== 'complete') : null;
+    const f = build ? forecastBuild(build, state.stages, calendar(), state.today) : null;
+    const color = f ? riskMeta(f.risk).color : '';
+    const pad = 0.8;
+    const topExtra = x.bandTopExtra || 0;
+    const band = `<div class="shop-band" style="left:${left - pad}%;top:${top - pad - topExtra}%;width:${width + pad * 2}%;height:${height + pad * 2 + topExtra}%"></div>`;
+    const cell = `<div class="shop-bay ${build ? 'occupied' : 'empty'} ${x.modifier}"
+      style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;${build ? `--bay-color:${color}` : ''}"
+      data-shop-bay="${x.id}" data-shop-line="${line ? line.id : ''}" data-build="${build ? build.id : ''}"
+      title="${line ? esc(line.name) : ''} · ${esc(x.title)}${build ? ' · ' + esc(build.name) : ' · open'}">
+      <span class="shop-bay-num">${esc(x.label)}</span>
+      ${build ? `<span class="shop-bay-build">${esc(build.name || 'Untitled')}</span>` : '<span class="shop-bay-open">open</span>'}
+    </div>`;
+    return band + cell;
+  }).join('');
+
   const legendItems = [['on-track', 'On Track'], ['at-risk', 'At Risk'], ['late', 'Late'], ['shipped', 'Shipped']];
 
   $('#shopRoot').innerHTML = `
@@ -1241,7 +1415,7 @@ function renderShopOverview() {
         <img src="./assets/shop-floor.jpg" alt="Shop floor plan" class="shop-img"
           onerror="this.classList.add('img-missing');this.closest('.shop-map').classList.add('no-img');">
         <div class="shop-img-missing">Floor plan image not found. Place <code>shop-floor.jpg</code> in a <code>src/assets/</code> folder next to index.html, then refresh. Bays are still clickable below.</div>
-        ${overlays}
+        ${overlays}${extraBays}
       </div>
     </div>
 `;
@@ -1261,7 +1435,8 @@ function renderShopOverview() {
 function openBayPicker(lineId, bay) {
   const line = state.lines.find((l) => l.id === lineId);
   const lineTitle = line ? esc(line.name) : 'this line';
-  const bayLabel = bay === 'sf' ? 'Spray Foam bay' : `Bay ${bay}`;
+  const extra = SHOP_EXTRA_BAYS.find((x) => x.id === bay);
+  const bayLabel = extra ? `${extra.title} bay` : bay === 'sf' ? 'Spray Foam bay' : `Bay ${bay}`;
   const candidates = state.builds.filter((b) => b.status !== 'complete' && (b.lineId !== lineId || String(b.bay) !== String(bay)));
 
   const body = candidates.length
@@ -1285,7 +1460,10 @@ function openBayPicker(lineId, bay) {
   $('#bayPickerOverlay').classList.add('open');
   $('#bayPickerModal').querySelectorAll('[data-place-build]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const targetBay = bay === 'sf' ? 'sf' : Number(bay);
+      // Numbered bays are stored as numbers; named bays ('sf', 'trailer', any
+      // future SHOP_EXTRA_BAYS id) must stay strings. Number('trailer') is NaN,
+      // which would have written a broken bay value and lost the assignment.
+      const targetBay = /^\d+$/.test(String(bay)) ? Number(bay) : String(bay);
       patchBuild(btn.dataset.placeBuild, { lineId, bay: targetBay });
       closeBayPicker();
     });
