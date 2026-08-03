@@ -1169,21 +1169,21 @@ function renderShopOverview() {
 
   const overlays = lineMap.map(({ def, line }) => {
     const region = def.region;
-    // The Spray Foam bay is INSERTED into this region, not appended outside it,
-    // so the region must be divided into 10.5 bay-widths — not 10. Dividing by
-    // def.bays alone made the strip 3.13% wider than the space it occupies:
-    // bays 4–10 were shoved left off the drawing's own bay outlines (Bay 10
-    // started at 18.04% against a region beginning at 21.17%) and Bay 1 was
-    // crushed against the right-hand wall. The masking band was then widened to
-    // hide the spill rather than the spill being fixed.
-    const halfBay = def.sprayFoam ? 0.5 : 0;
-    const bayWidth = (region.right - region.left) / (def.bays + halfBay);
+    // NOTE: bayWidth divides the region by def.bays, and the half-width Spray
+    // Foam bay is then inserted by shifting bays 4-10 left (see below), so the
+    // rendered strip is half a bay wider than the region and overhangs
+    // region.left. That looks like a bug in isolation and is NOT — the region
+    // percentages were calibrated by eye against this rendered result, so the
+    // overhang is part of the calibration. Dividing by def.bays + 0.5 to make
+    // the strip flush was tried and it misaligned every bay. Leave this alone
+    // unless you are re-deriving the region coordinates at the same time.
+    const bayWidth = (region.right - region.left) / def.bays;
     // A solid band that blankets the whole bay strip, hiding the busy floor-plan
     // detail behind the bays. Padded slightly so the drawing's own bay outlines
     // don't peek out around the edges.
     const pad = 0.8;
     const topExtra = def.bandTopExtra || 0; // extra upward coverage to hide drawing lines above the bays
-    const band = `<div class="shop-band" style="left:${region.left - pad}%;top:${region.top - pad - topExtra}%;width:${region.right - region.left + pad * 2}%;height:${region.bottom - region.top + pad * 2 + topExtra}%"></div>`;
+    let band = `<div class="shop-band" style="left:${region.left - pad}%;top:${region.top - pad - topExtra}%;width:${region.right - region.left + pad * 2}%;height:${region.bottom - region.top + pad * 2 + topExtra}%"></div>`;
 
     // Build the list of bay descriptors: {id, label, left, width}. Numbered
     // right-to-left (Bay 1 rightmost).
@@ -1193,14 +1193,15 @@ function renderShopOverview() {
       cellDefs.push({ id: bayNum, label: String(bayNum), left: region.right - bayWidth * bayNum, width: bayWidth });
     }
     // A half-width Spray Foam bay is inserted at the Bay 3 / Bay 4 boundary.
-    // Bays 4–10 shift left by that half-bay to make room. Because bayWidth is
-    // now derived from def.bays + 0.5, the shifted run lands flush on
-    // region.left instead of overhanging it, so the band needs no widening.
+    // Bays 4-10 shift left by that half-bay to make room, so nothing overlaps
+    // and the physical order matches the floor.
     if (def.sprayFoam) {
       const sfWidth = bayWidth / 2;
       const boundary = region.right - bayWidth * 3; // left edge of Bay 3 = start of the 3/4 gap
       for (const c of cellDefs) if (c.id >= 4) c.left -= sfWidth; // shift the higher-numbered bays left
       cellDefs.push({ id: 'sf', label: 'SF', sprayFoam: true, left: boundary - sfWidth, width: sfWidth });
+      // Widen the masking band to cover the shifted bays.
+      band = `<div class="shop-band" style="left:${region.left - pad - sfWidth}%;top:${region.top - pad}%;width:${region.right - region.left + pad * 2 + sfWidth}%;height:${region.bottom - region.top + pad * 2}%"></div>`;
     }
 
     const cells = cellDefs.map((c) => {

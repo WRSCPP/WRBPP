@@ -339,3 +339,46 @@ tbody tr:hover > td{ background:var(--wrb-hover-tint) }
    cue that does not rely on colour alone. */
 .g-bar:hover{ filter:brightness(1.06); box-shadow:0 2px 5px rgba(57,57,58,.18) }
 .td-name[data-open]:hover{ text-decoration:underline; text-underline-offset:2px }
+
+/* ===========================================================================
+   SHOP OVERVIEW — bay boundaries
+   ===========================================================================
+   The theme deliberately owns no .shop-* geometry; bay position and width are
+   absolutely-positioned percentages computed in app.js, so no stylesheet can
+   change their size. What the palette CAN change is whether a bay's edges are
+   visible, and that is what regressed.
+
+   .shop-bay.empty in styles.css does two things that only worked with the old
+   kraft palette:
+
+     border:2px dashed var(--line-strong)   /* the divider between bays   */
+     box-shadow:0 0 0 2px var(--surface-2)  /* spreads the fill outward   */
+
+   The box-shadow pushes each empty bay's own fill 2px past its border on all
+   sides, so two adjacent empty bays have overlapping fills and the only thing
+   marking the join is that dashed border. Measured contrast of the border
+   against the fill it sits on:
+
+     old  #BFB49B on #EFE9DA   1.70:1
+     new  #CFC7BB on #F2EEE8   1.45:1   <- no longer registers
+
+   Below roughly 1.5:1 the dashes disappear, the merged fills read as one
+   continuous block, and a run of open bays looks like a single oversized bay
+   next to the solid-bordered Spray Foam cell. Hence "the bays are the wrong
+   size" when their geometry is in fact unchanged.
+
+   Fix: drop the fill-spreading ring so each bay stops bleeding into its
+   neighbour, and give the divider enough contrast to read (3.07:1).
+   --------------------------------------------------------------------------- */
+.shop-bay.empty{
+  border-color:var(--wrb-ink-faint);
+  box-shadow:none;
+}
+
+/* Spray Foam keeps its own solid timber border, but needs the same treatment —
+   without this it inherits the ring from .shop-bay.empty's original rule and
+   bleeds into Bay 3 and Bay 4 on either side of it. */
+.shop-bay.spray-foam.empty{
+  border-color:var(--wrb-idle);
+  box-shadow:none;
+}
