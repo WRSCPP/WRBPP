@@ -759,7 +759,10 @@ function renderBoard() {
 // them, staying in sync with each build's Production Line + Bay fields.
 const SHOP_LINES = [
   // Long Line — Modular Home Manufacturing Bay (top), 10 bays.
-  { key: 'long', label: 'Long Line', match: ['long', 'modular', 'line 1', 'line-1'], bays: 10,
+  // sprayFoam: a half-width bay is INSERTED between Bay 3 and Bay 4. This flag
+  // drives both the insertion and the bay-width divisor below; they must agree,
+  // and keeping them keyed off one property is what stops them drifting apart.
+  { key: 'long', label: 'Long Line', match: ['long', 'modular', 'line 1', 'line-1'], bays: 10, sprayFoam: true,
     region: { left: 21.17, right: 83.76, top: 3.76, bottom: 31.02 }, tone: 'saw' },
   // Short Line — Tiny Home Manufacturing Bay (bottom), 6 bays.
   { key: 'short', label: 'Short Line', match: ['short', 'tiny', 'line 2', 'line-2'], bays: 6,
@@ -1166,13 +1169,21 @@ function renderShopOverview() {
 
   const overlays = lineMap.map(({ def, line }) => {
     const region = def.region;
-    const bayWidth = (region.right - region.left) / def.bays;
+    // The Spray Foam bay is INSERTED into this region, not appended outside it,
+    // so the region must be divided into 10.5 bay-widths — not 10. Dividing by
+    // def.bays alone made the strip 3.13% wider than the space it occupies:
+    // bays 4–10 were shoved left off the drawing's own bay outlines (Bay 10
+    // started at 18.04% against a region beginning at 21.17%) and Bay 1 was
+    // crushed against the right-hand wall. The masking band was then widened to
+    // hide the spill rather than the spill being fixed.
+    const halfBay = def.sprayFoam ? 0.5 : 0;
+    const bayWidth = (region.right - region.left) / (def.bays + halfBay);
     // A solid band that blankets the whole bay strip, hiding the busy floor-plan
     // detail behind the bays. Padded slightly so the drawing's own bay outlines
     // don't peek out around the edges.
     const pad = 0.8;
     const topExtra = def.bandTopExtra || 0; // extra upward coverage to hide drawing lines above the bays
-    let band = `<div class="shop-band" style="left:${region.left - pad}%;top:${region.top - pad - topExtra}%;width:${region.right - region.left + pad * 2}%;height:${region.bottom - region.top + pad * 2 + topExtra}%"></div>`;
+    const band = `<div class="shop-band" style="left:${region.left - pad}%;top:${region.top - pad - topExtra}%;width:${region.right - region.left + pad * 2}%;height:${region.bottom - region.top + pad * 2 + topExtra}%"></div>`;
 
     // Build the list of bay descriptors: {id, label, left, width}. Numbered
     // right-to-left (Bay 1 rightmost).
@@ -1181,16 +1192,15 @@ function renderShopOverview() {
       const bayNum = i + 1;
       cellDefs.push({ id: bayNum, label: String(bayNum), left: region.right - bayWidth * bayNum, width: bayWidth });
     }
-    // Long Line gets a half-width Spray Foam bay inserted at the Bay 3 / Bay 4
-    // boundary. Bays 4–10 shift left by the half-bay to make room, so nothing
-    // overlaps and the physical order matches the floor.
-    if (def.key === 'long') {
+    // A half-width Spray Foam bay is inserted at the Bay 3 / Bay 4 boundary.
+    // Bays 4–10 shift left by that half-bay to make room. Because bayWidth is
+    // now derived from def.bays + 0.5, the shifted run lands flush on
+    // region.left instead of overhanging it, so the band needs no widening.
+    if (def.sprayFoam) {
       const sfWidth = bayWidth / 2;
       const boundary = region.right - bayWidth * 3; // left edge of Bay 3 = start of the 3/4 gap
       for (const c of cellDefs) if (c.id >= 4) c.left -= sfWidth; // shift the higher-numbered bays left
       cellDefs.push({ id: 'sf', label: 'SF', sprayFoam: true, left: boundary - sfWidth, width: sfWidth });
-      // Widen the masking band a touch to cover the shifted bays.
-      band = `<div class="shop-band" style="left:${region.left - pad - sfWidth}%;top:${region.top - pad}%;width:${region.right - region.left + pad * 2 + sfWidth}%;height:${region.bottom - region.top + pad * 2}%"></div>`;
     }
 
     const cells = cellDefs.map((c) => {

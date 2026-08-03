@@ -361,7 +361,11 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-bay:hover{transform:scale(1.03);box-shadow:0 3px 10px rgba(31,42,51,.25);z-index:5}
 .shop-bay-num{font-family:var(--mono);font-size:11px;font-weight:700}
 .shop-bay.empty .shop-bay-num{color:var(--text-muted)}
-.shop-bay-build{font-family:var(--body);font-size:9.5px;font-weight:600;text-align:center;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;max-width:100%}
+/* Bays are tall and narrow (roughly 74 x 163px at a typical window size), so a
+   2-line clamp was truncating most real build names — "Ofland - Workforce.."
+   — while leaving most of the cell empty. There is room for four lines with
+   plenty to spare. overflow-wrap keeps a single long token from spilling out. */
+.shop-bay-build{font-family:var(--body);font-size:9.5px;font-weight:600;text-align:center;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;max-width:100%;overflow-wrap:anywhere}
 .shop-bay-open{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim)}
 .shop-line-labels{display:flex;gap:24px;flex-wrap:wrap;margin-top:8px}
 .shop-line-label{font-size:12.5px;color:var(--text-muted)}
