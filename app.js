@@ -117,7 +117,7 @@ const state = {
   scenario: null, // { buildId, date } for the What-If tool
   openBuildId: null,
   modalTab: 'details',
-  today: toISO(new Date()),
+  // `today` is defined as a live getter immediately below — see localToday().
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -125,6 +125,48 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => (s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtDate = (iso) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 const fmtShort = (iso) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+
+// ----------------------------- "Today", correctly -----------------------------
+// Two separate defects used to live in `state.today`, and they pulled in
+// opposite directions:
+//
+//   1. It was a SNAPSHOT — `toISO(new Date())` evaluated once when this module
+//      loaded, then never refreshed. A browser left open on the shop floor
+//      overnight kept reporting yesterday. Since state.today feeds forecasts,
+//      risk badges and start suggestions in ~29 places, that quietly skewed far
+//      more than the Updated column.
+//
+//   2. It used engine.toISO(), which reads getUTC* accessors. That is correct
+//      for the engine — every planning date is deliberately anchored to UTC
+//      midnight so the math can't drift — but it is wrong for "what day is it
+//      for the person standing in the shop." West of UTC, any time after
+//      early evening already reads as tomorrow.
+//
+// Fix: compute the LOCAL calendar date with local accessors, and read it fresh
+// on every access. The engine still receives a plain 'YYYY-MM-DD' string and
+// still converts it to UTC midnight internally, so its convention is untouched
+// and its tests keep passing. Do not swap this for toISO(new Date()).
+function localToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Local calendar date of a stored timestamp. hoursUpdatedAt is written with
+// toISOString(), so `.slice(0, 10)` yields the UTC date — a day AHEAD for any
+// edit made after early evening in a western timezone. Convert properly.
+function localDateOf(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime())
+    ? ''
+    : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Read-only live getter: every one of the existing `state.today` call sites now
+// gets the current local date with no change at those sites. Nothing in the app
+// assigns to state.today (verified), so omitting a setter is safe and makes an
+// accidental future assignment fail loudly rather than silently re-freezing it.
+Object.defineProperty(state, 'today', { get: localToday, enumerable: true });
 
 // ----------------------------- Boot -----------------------------
 async function boot() {
@@ -202,6 +244,18 @@ async function boot() {
   });
 
   wireGlobalEvents();
+
+  // The shop floor leaves this tab open for days. state.today is now always
+  // current when read, but nothing would trigger a repaint at midnight, so the
+  // visible forecasts and dates would sit stale until someone clicked something.
+  // Poll once a minute — cheap — and re-render only on an actual date change.
+  let lastSeenDate = state.today;
+  setInterval(() => {
+    if (state.today === lastSeenDate) return;
+    lastSeenDate = state.today;
+    render();
+  }, 60_000);
+
   render();
 }
 
@@ -785,12 +839,12 @@ function renderBuildHours() {
     // Strictly the last time hours were edited in THIS tab (not any other edit).
     const updated = b.hoursUpdatedAt;
     return `<tr class="${idx % 2 ? 'bh-alt' : ''}">
-      <td class="bh-name bh-name-var ${tone}" style="${wStyle('name')}" data-open-build="${b.id}" title="Open ${esc(b.name || 'Untitled')}"><button class="bh-highlight-btn" data-highlight-row="${b.id}" title="Highlight this row">★</button><span class="bh-name-text">${esc(b.name || 'Untitled')}<span class="bh-sub">${esc(b.moduleType || '')}</span></span></td>
+      <td class="bh-name bh-name-var ${tone}" style="${wStyle('name')}" data-open-build="${b.id}" title="Open ${esc(b.name || 'Untitled')}"><div class="bh-name-inner"><button class="bh-highlight-btn" data-highlight-row="${b.id}" title="Highlight this row">★</button><span class="bh-name-text">${esc(b.name || 'Untitled')}<span class="bh-sub">${esc(b.moduleType || '')}</span></span></div></td>
       ${cells}
       <td class="bh-total">${actual || 0}</td>
       <td class="bh-goal"><input class="bh-input bh-goal-input" type="number" min="0" step="1" value="${goal || ''}" data-goal-build="${b.id}" title="Projected (goal) hours" placeholder="—"></td>
       <td class="bh-var ${tone}">${goal ? `${varc > 0 ? '+' : ''}${varc}` : '—'}</td>
-      <td class="bh-updated">${updated ? fmtDate(updated.slice(0, 10)) : '—'}</td>
+      <td class="bh-updated">${updated ? fmtDate(localDateOf(updated)) : '—'}</td>
       <td class="bh-target">${b.targetShip ? fmtDate(b.targetShip) : '—'}</td>
       <td class="bh-status"><span class="bh-status-pill ${b.status === 'complete' ? 'done' : 'active'}">${b.status === 'complete' ? 'Complete' : esc(b.status)}</span></td>
     </tr>`;
@@ -1097,7 +1151,7 @@ function exportBuildHoursMatrix(rows) {
     out.push([
       b.name || 'Untitled', b.moduleType || '',
       ...stages.map((s) => Number(b.stageHours?.[s.id]) || 0),
-      actual, goal, goal ? actual - goal : '', updated ? updated.slice(0, 10) : '', b.targetShip || '', b.status,
+      actual, goal, goal ? actual - goal : '', localDateOf(updated), b.targetShip || '', b.status,
     ]);
   }
   const csv = out.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');

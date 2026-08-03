@@ -307,6 +307,27 @@ table th{
  * ------------------------------------------------------------------------- */
 tbody tr:hover > td{ background:var(--wrb-hover-tint) }
 
+/* -- Frozen cells must stay opaque under that tint ------------------------- *
+ * --wrb-hover-tint is rgba(57,57,58,.035) — 96.5% transparent. That is fine
+ * for an ordinary cell sitting on the page background, but it is destructive
+ * for a `position:sticky` cell: the rule above REPLACES the frozen Build
+ * column's opaque background, so the horizontally-scrolled stage-hour columns
+ * underneath show straight through it on hover. Same for the sticky totals row.
+ *
+ * Fix: re-apply the identical tint composited over each cell's own opaque base
+ * rather than replacing it. Selectors are deliberately specific enough to beat
+ * both the rule above and `.hours-grid tbody tr.bh-alt .bh-name` in styles.css.
+ * ------------------------------------------------------------------------- */
+.hours-grid tbody tr:hover > .bh-name{
+  background:color-mix(in srgb, var(--wrb-ink) 3.5%, var(--card));
+}
+.hours-grid tbody tr.bh-alt:hover > .bh-name{
+  background:color-mix(in srgb, var(--wrb-ink) 3.5%, var(--paper-2));
+}
+.hours-grid tbody tr.bh-totals-row:hover > td{
+  background:color-mix(in srgb, var(--wrb-ink) 3.5%, var(--paper-2));
+}
+
 .b-card{ transition:box-shadow .12s ease, border-color .12s ease }
 .b-card:hover{
   border-color:var(--wrb-rule-strong);

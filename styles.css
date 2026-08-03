@@ -463,7 +463,17 @@ html,body{max-width:100%;overflow-x:hidden}
 .hours-grid tbody tr.bh-alt .bh-input:hover{background:var(--surface-3)}
 
 /* Build Hours: row-highlight toggle */
-.bh-name{display:flex;align-items:center;gap:6px}
+/* The name cell MUST stay a real table cell. This rule used to set
+   `.bh-name{display:flex}` so the ★ button and name could sit side by side —
+   but .bh-name is a <td> that is also `position:sticky; left:0`. Changing a
+   table cell's display takes it out of the table layout model (the browser
+   wraps it in an anonymous cell box), which broke the frozen first column:
+   the hour inputs scrolled out from underneath it, and since .bh-input:hover
+   paints its own background, hovering the name lit up the stage-hour cells
+   showing through. The flex layout now lives on an inner wrapper div instead,
+   leaving the cell itself a plain sticky table-cell. */
+.bh-name{display:table-cell}
+.bh-name-inner{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
 .bh-name-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .bh-highlight-btn{flex:0 0 auto;background:transparent;border:none;cursor:pointer;color:var(--line-strong);font-size:13px;line-height:1;padding:2px;border-radius:3px}
 .bh-highlight-btn:hover{color:var(--amber)}
