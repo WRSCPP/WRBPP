@@ -365,15 +365,21 @@ html,body{max-width:100%;overflow-x:hidden}
    frame. Two neighbours therefore show a 4px gap, entirely within their own
    bounds, overlapping nothing. */
 .shop-bay.occupied{background:var(--bay-color);border-color:var(--card);color:#fff}
-/* No box-shadow here. This rule used to carry `box-shadow:0 0 0 2px
-   var(--surface-2)`, which paints the bay's own fill 2px OUTSIDE its border on
-   all four sides. Since .shop-bay is z-index 2 and the cells are contiguous,
-   that ring lands on top of whichever bays sit either side — so an open bay
-   visibly overlapped its neighbours, and the Spray Foam cell (which matches
-   .shop-bay.empty too) overlapped both Bay 3 and Bay 4. The bays themselves
-   never overlapped geometrically; the ring did. The dashed border alone marks
-   the boundary. */
-.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong)}
+/* `empty` is also a generic empty-state utility class (see .empty around line 67,
+   restyled again in planner-theme.css). That rule sets a large padding and an
+   ::before illustration, and it collides with .shop-bay.empty here.
+   .shop-bay{padding:2px} and .empty{padding:...} have identical specificity
+   (0,1,0), so before the theme existed the bays kept 2px only because
+   .shop-bay came later in this file. planner-theme.css loads third and won that
+   tiebreak, giving every open bay 44px of horizontal padding — and because
+   box-sizing is border-box a box cannot shrink below its own padding, the inline
+   width:6.259% was discarded and every empty bay rendered 92px wide instead of
+   75.55px, overlapping its neighbours by 16.45px. Spray Foam, also .empty, blew
+   out from 37.8px to 92px and swallowed Bay 3.
+   Setting padding here at (0,2,0) makes the bays immune to that collision
+   regardless of stylesheet order, and content:none drops the illustration. */
+.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong);padding:2px}
+.shop-bay.empty::before{content:none}
 .shop-bay:hover{transform:scale(1.03);box-shadow:0 3px 10px rgba(31,42,51,.25);z-index:5}
 .shop-bay-num{font-family:var(--mono);font-size:11px;font-weight:700}
 .shop-bay.empty .shop-bay-num{color:var(--text-muted)}
