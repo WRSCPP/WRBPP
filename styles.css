@@ -356,8 +356,24 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-map.no-img .shop-img-missing{display:flex}
 .shop-band{position:absolute;background:var(--card);border-radius:4px;z-index:1}
 .shop-bay{position:absolute;box-sizing:border-box;border:2px solid transparent;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;line-height:1.1;padding:2px;transition:transform .08s,box-shadow .12s;overflow:hidden;z-index:2}
-.shop-bay.occupied{background:var(--bay-color);border-color:var(--bay-color);color:#fff;box-shadow:0 0 0 1px var(--card)}
-.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong);box-shadow:0 0 0 2px var(--surface-2)}
+/* Occupied bays previously carried `box-shadow:0 0 0 1px var(--card)` as a
+   separator. Same problem as .shop-bay.empty below, just 1px instead of 2px:
+   it painted outside the box and bled over the adjacent bay. Adjacent occupied
+   bays still need separating — without it a run of green bays merges into one
+   blob — so the separation moves INSIDE the box: .shop-bay already reserves a
+   2px border, and tinting it to the band colour gives every bay a light inset
+   frame. Two neighbours therefore show a 4px gap, entirely within their own
+   bounds, overlapping nothing. */
+.shop-bay.occupied{background:var(--bay-color);border-color:var(--card);color:#fff}
+/* No box-shadow here. This rule used to carry `box-shadow:0 0 0 2px
+   var(--surface-2)`, which paints the bay's own fill 2px OUTSIDE its border on
+   all four sides. Since .shop-bay is z-index 2 and the cells are contiguous,
+   that ring lands on top of whichever bays sit either side — so an open bay
+   visibly overlapped its neighbours, and the Spray Foam cell (which matches
+   .shop-bay.empty too) overlapped both Bay 3 and Bay 4. The bays themselves
+   never overlapped geometrically; the ring did. The dashed border alone marks
+   the boundary. */
+.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong)}
 .shop-bay:hover{transform:scale(1.03);box-shadow:0 3px 10px rgba(31,42,51,.25);z-index:5}
 .shop-bay-num{font-family:var(--mono);font-size:11px;font-weight:700}
 .shop-bay.empty .shop-bay-num{color:var(--text-muted)}
