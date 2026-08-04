@@ -114,6 +114,21 @@ main{padding:22px 26px 64px}
 .g-wrap{border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);overflow:hidden}
 .g-scroll{overflow-x:auto;position:relative}
 .g-inner{display:block}
+/* ---------------------------------------------------------------------------
+   Display scale for the two dense tabs (Gantt, Build Hours).
+   --tab-zoom 0.8 reproduces what browser zoom at 80% gives, as a default so the
+   whole schedule fits without scrolling. Set it to 1 to go back to full size.
+
+   IMPORTANT: CSS zoom scales every length inside the element, INCLUDING the
+   vh-based max-height on the scroll containers. Left alone, the rows get 20%
+   shorter and so does the box holding them, so exactly the same number of rows
+   would be visible and the zoom would achieve nothing. The scroll containers
+   therefore divide their height by --tab-zoom to cancel that out, leaving the
+   viewport-filling box the same visual size while the content inside it shrinks.
+   --------------------------------------------------------------------------- */
+:root{--tab-zoom:0.8;--g-row-h:56px;--g-bar-h:26px}
+#ganttRoot,#hoursRoot{zoom:var(--tab-zoom)}
+
 .g-label-sp,.g-label{flex:0 0 234px;width:234px;min-width:234px;max-width:234px;box-sizing:border-box;position:sticky;left:0;z-index:4;background:var(--card);border-right:1.5px solid var(--line-strong)}
 .g-head{display:flex;border-bottom:1.5px solid var(--ink)}
 .g-label-sp{height:34px;display:flex;align-items:center;padding:0 13px;font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--text-dim);z-index:6}
@@ -125,12 +140,17 @@ main{padding:22px 26px 64px}
 .g-row{display:flex;border-bottom:1px solid var(--line)}.g-row:last-child{border-bottom:none}
 .g-row.group .g-label{background:var(--paper-2);font-family:var(--display);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);display:flex;align-items:center;padding:0 13px;height:30px}
 .g-row.group .g-track{background:var(--paper-2);height:30px}
-.g-row:not(.group) .g-label{padding:7px 13px;display:flex;flex-direction:column;justify-content:center;height:48px;cursor:pointer}
+/* Row height comes from --g-row-h so the label, the track and the bar's vertical
+   centring can never drift apart. Raised from 48px to fit two lines of build name;
+   every row uses it, so rows stay uniform regardless of name length. */
+.g-row:not(.group) .g-label{padding:7px 13px;display:flex;flex-direction:column;justify-content:center;height:var(--g-row-h);cursor:pointer}
 .g-row:not(.group) .g-label:hover{background:var(--surface-2)}
-.g-name{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;min-width:0}
+/* Build names wrap to two lines instead of being cut off with an ellipsis. The
+   clamp is what keeps rows uniform: a longer name wraps, it never grows the row. */
+.g-name{font-weight:600;font-size:12px;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:break-word;max-width:100%;min-width:0}
 .g-meta{font-family:var(--mono);font-size:9.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;min-width:0}
-.g-track{position:relative;flex:0 0 auto;height:48px}
-.g-bar{position:absolute;top:11px;height:26px;border-radius:3px;display:flex;align-items:center;padding:0 9px;font-size:11px;font-weight:600;color:#fff;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.18);box-shadow:0 1px 2px rgba(31,42,51,.12)}
+.g-track{position:relative;flex:0 0 auto;height:var(--g-row-h)}
+.g-bar{position:absolute;top:calc((var(--g-row-h) - var(--g-bar-h)) / 2);height:var(--g-bar-h);border-radius:3px;display:flex;align-items:center;padding:0 9px;font-size:11px;font-weight:600;color:#fff;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.18);box-shadow:0 1px 2px rgba(31,42,51,.12)}
 .g-bar.tentative{background:repeating-linear-gradient(45deg,var(--surface-2),var(--surface-2) 5px,var(--paper) 5px,var(--paper) 10px)!important;border:1.5px dashed var(--line-strong);color:var(--text-muted)}
 .g-bar:hover{filter:brightness(1.06)}
 .g-target{position:absolute;top:4px;bottom:4px;width:0;border-left:2px dashed var(--ink);z-index:3}
@@ -462,7 +482,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .hf select{min-width:120px}
 .hf-search{min-width:180px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);font-size:12.5px}
 .hours-filters .btn{margin-left:auto}
-.hours-grid-wrap{overflow:auto;border:1px solid var(--line-strong);border-radius:var(--radius);max-height:calc(100vh - 300px)}
+.hours-grid-wrap{overflow:auto;border:1px solid var(--line-strong);border-radius:var(--radius);max-height:calc((100vh - 300px) / var(--tab-zoom))}
 .hours-grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%}
 .hours-grid th,.hours-grid td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);white-space:nowrap}
 .hours-grid thead th{position:sticky;top:0;z-index:3;background:var(--surface-2);font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);font-weight:600;padding:8px 6px;text-align:center;vertical-align:bottom}
@@ -777,6 +797,9 @@ body.col-resizing *{cursor:col-resize!important}
   body.printing .hours-grid-wrap,
   body.printing .g-wrap,
   body.printing .g-scroll{max-height:none !important;height:auto !important;overflow:visible !important;border:none !important;border-radius:0 !important}
+  /* Print at full size — the on-screen 80% default would otherwise shrink the
+     printed output as well, on top of the browser's own print scaling. */
+  #ganttRoot,#hoursRoot{zoom:1 !important}
 
   /* --- Build Hours grid --- */
   body.printing-hours .hours-grid{font-size:7.5pt;border-collapse:collapse;width:100% !important;table-layout:auto}
@@ -949,12 +972,12 @@ body.readonly #adminPeopleRoot{display:none !important}
    is why top:0 had nothing to stick to. Giving the chart its own viewport makes
    it behave like a spreadsheet: header frozen on top, labels frozen at left
    (.g-label already handles that axis). */
-.g-scroll{overflow:auto;max-height:calc(100vh - 300px);min-height:300px}
+.g-scroll{overflow:auto;max-height:calc((100vh - 300px) / var(--tab-zoom));min-height:calc(300px / var(--tab-zoom))}
 .g-head{position:sticky;top:0;z-index:7;background:var(--card)}
 .g-head .ticks{background:var(--card)}
 
 @media (max-width:900px){
-  .g-scroll{max-height:calc(100vh - 260px);min-height:260px}
+  .g-scroll{max-height:calc((100vh - 260px) / var(--tab-zoom));min-height:calc(260px / var(--tab-zoom))}
 }
 
 /* Printing lays the whole chart out flat, so nothing should be pinned. */

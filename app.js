@@ -1238,15 +1238,38 @@ function updateHoursSummaryRows() {
 }
 
 // Totals and Average are both pinned to the bottom of the scroll area, so Totals
-// must sit exactly one Average-row height above the floor. Measure it rather than
-// hardcoding, since row height moves with font size and browser zoom.
+// must sit exactly one Average-row height above the floor.
+//
+// Two things make this easy to get wrong:
+//   * offsetHeight, NOT getBoundingClientRect().height. The latter returns
+//     *visually scaled* pixels, so under the 80% zoom this tab now defaults to it
+//     reports ~42px for a 52px row. Writing that back as the sticky offset left
+//     Totals 10px low, overlapping Average — which reads as text bleeding through
+//     the bottom row on hover. offsetHeight is layout pixels and zoom-invariant.
+//   * Row height depends on the webfont, which arrives after first paint (Figtree
+//     is @imported, so it is a second round trip). Measuring once on render can
+//     capture the fallback-font height and then go stale.
+// Hence: measure with offsetHeight, and re-measure when fonts settle and whenever
+// the row's own size changes.
 function setSummaryRowOffset() {
   const root = $('#hoursRoot');
   const avgRow = root?.querySelector('.hours-grid tbody tr.bh-avg-row');
   if (!root || !avgRow) return;
-  const h = Math.round(avgRow.getBoundingClientRect().height);
-  if (h > 0) root.style.setProperty('--bh-avg-h', `${h}px`);
+  const apply = () => {
+    const h = avgRow.offsetHeight;
+    if (h > 0) root.style.setProperty('--bh-avg-h', `${h}px`);
+  };
+  apply();
+  // Fonts landing later changes the row height; re-measure when they settle.
+  document.fonts?.ready?.then(apply).catch(() => {});
+  // And whenever the row itself resizes (zoom change, window resize, longer text).
+  if (typeof ResizeObserver === 'function') {
+    summaryRowObserver?.disconnect();
+    summaryRowObserver = new ResizeObserver(apply);
+    summaryRowObserver.observe(avgRow);
+  }
 }
+let summaryRowObserver = null;
 
 // Export the filtered matrix (builds × stages) to CSV, mirroring the sheet layout.
 // ----------------------------- Printing -----------------------------
