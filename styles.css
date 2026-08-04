@@ -312,7 +312,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .bay-slot{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);font-size:12px;min-height:38px;transition:border-color .12s,background .12s}
 .bay-slot.open{opacity:.75}
 .bay-slot.filled{border-left:3px solid var(--pine)}
-.bay-slot.conflict{border-left:3px solid var(--clay);background:color-mix(in srgb,var(--clay) 8%,var(--surface-2))}
+.bay-slot.conflict{border-left:3px solid var(--timber);background:color-mix(in srgb,var(--timber) 8%,var(--surface-2))}
 .bay-slot.drop-hover{border-color:var(--saw);border-style:dashed;background:color-mix(in srgb,var(--saw) 10%,var(--surface-2))}
 .bay-num{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);min-width:44px;flex:0 0 auto}
 .bay-occupant{flex:1;display:flex;flex-wrap:wrap;gap:5px;min-width:0}
@@ -324,6 +324,17 @@ html,body{max-width:100%;overflow-x:hidden}
 
 /* bay conflict warning in the build modal */
 .bay-warning{margin:12px 0 0;padding:10px 13px;border:1px solid var(--clay);border-left:4px solid var(--clay);border-radius:var(--radius);background:color-mix(in srgb,var(--clay) 7%,var(--card));font-size:12.5px;color:var(--clay);line-height:1.5}
+/* Sharing a bay is a normal way the floor operates, not an error, so this note is
+   informational: same shape as .bay-warning but in neutral ink with no icon. */
+.bay-shared{margin:12px 0 0;padding:10px 13px;border:1px solid var(--line-strong);border-left:4px solid var(--timber);border-radius:var(--radius);background:var(--surface-2);font-size:12.5px;color:var(--text-muted);line-height:1.5}
+
+/* Multi-select bay picker in the build panel. */
+.bay-pick{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.bay-pick-opt{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);font-size:11.5px;cursor:pointer;user-select:none}
+.bay-pick-opt:hover{border-color:var(--timber)}
+.bay-pick-opt.on{background:color-mix(in srgb,var(--timber) 12%,var(--card));border-color:var(--timber);font-weight:600}
+.bay-pick-opt input{margin:0;width:12px;height:12px}
+.bay-pick-hint{flex:1 0 100%;font-size:11px;color:var(--text-dim);margin-top:2px}
 
 /* ---------- build history timeline (reports) ---------- */
 .rep-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -401,6 +412,22 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-bay.spray-foam .shop-bay-num{color:var(--timber);font-size:9px}
 .shop-bay.spray-foam.occupied .shop-bay-num{color:#fff}
 .shop-bay.spray-foam .shop-bay-open{font-size:7px}
+
+/* A line divides into lanes when any of its bays holds more than one build, so
+   every cell in that row gets shorter. Shrink the type and drop the secondary
+   label so the contents still fit rather than clipping. */
+.shop-bay.compact{padding:1px}
+.shop-bay.compact .shop-bay-num{font-size:9px}
+.shop-bay.compact .shop-bay-build{font-size:8.5px;-webkit-line-clamp:2;line-height:1.1}
+.shop-bay.compact .shop-bay-open{font-size:7px}
+
+/* Drag feedback. A build box is the drag handle; open slots and other build boxes
+   are drop targets. drop-hover = move here, drop-hover-add = Shift, i.e. add this
+   bay to the build's set rather than replacing it. */
+.shop-build{cursor:grab}
+.shop-build.dragging{opacity:.4;cursor:grabbing}
+.shop-bay.drop-hover{outline:2px solid var(--timber);outline-offset:-2px;filter:brightness(1.04)}
+.shop-bay.drop-hover-add{outline:2px dashed var(--pine);outline-offset:-2px;filter:brightness(1.06)}
 
 /* ---------- Bay picker modal ---------- */
 .modal.modal-sm{max-width:440px}
@@ -577,7 +604,9 @@ body.col-resizing *{cursor:col-resize!important}
 .lc-bay{position:relative;min-height:56px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);padding:6px 8px;display:flex;flex-direction:column;gap:3px;transition:border-color .12s,background .12s}
 .lc-bay.filled{border-left:3px solid var(--bc,var(--pine));background:var(--card)}
 .lc-bay.open{opacity:.6}
-.lc-bay.conflict{border-color:var(--clay);border-left:3px solid var(--clay);background:color-mix(in srgb,var(--clay) 7%,var(--card));opacity:1}
+/* Formerly .conflict, styled as an error. Two active builds in one bay is now a
+   supported arrangement, so this reads as a neutral "shared" marker instead. */
+.lc-bay.conflict{border-color:var(--timber);border-left:3px solid var(--timber);background:color-mix(in srgb,var(--timber) 7%,var(--card));opacity:1}
 .lc-bay.drop-hover{border-color:var(--saw);border-style:dashed;background:color-mix(in srgb,var(--saw) 10%,var(--surface-2));opacity:1}
 .lc-baynum{font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);font-weight:600}
 .lc-occ{display:flex;flex-wrap:wrap;gap:3px;flex:1;align-items:flex-start}

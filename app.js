@@ -327,54 +327,88 @@ function filteredBuilds() {
   });
 }
 function lineName(id) { return (state.lines.find((l) => l.id === id) || {}).name || '—'; }
-// Warning banner shown in the modal when this active build shares its bay with
-// another active build on the same line.
-function bayConflictWarning(build) {
-  if (build.status !== 'active' || !build.bay) return '';
-  const others = state.builds.filter((b) => b.id !== build.id && b.status === 'active' && b.lineId === build.lineId && String(b.bay) === String(build.bay));
+
+// ----------------------------- Bays: many-to-many -----------------------------
+// The floor genuinely needs both directions: one build can occupy several bays (a
+// double-wide spanning two) and one bay can hold several builds (two tiny homes
+// side by side). `bays` — an array — is the source of truth.
+//
+// The old scalar `bay` is still written on every save as bays[0]. Nothing reads it
+// as authoritative any more; it exists so anything still expecting a single value
+// keeps working — a colleague on a stale browser tab, the CSV export, older
+// reports. Because builds live in a `doc jsonb` column this needed no migration,
+// and because the change is purely additive, reverting the app files restores the
+// previous behaviour with no data to clean up.
+function bayList(build) {
+  if (!build) return [];
+  const raw = Array.isArray(build.bays) ? build.bays : [build.bay];
+  return [...new Set(raw.filter((v) => v !== null && v !== undefined && v !== '').map(String))];
+}
+// Patch for a new bay set. Numeric ids are stored as numbers and named ones
+// ('sf', 'trailer') as strings, matching how they are declared.
+function bayPatch(bays) {
+  const clean = [...new Set(bays.filter((v) => v !== null && v !== undefined && v !== '').map(String))]
+    .map((v) => (/^\d+$/.test(v) ? Number(v) : v));
+  return { bays: clean, bay: clean.length ? clean[0] : null };
+}
+function bayDisplayName(v) {
+  if (String(v) === 'sf') return 'Spray Foam';
+  const x = SHOP_EXTRA_BAYS.find((e) => String(e.id) === String(v));
+  return x ? x.title : `Bay ${v}`;
+}
+const bayListLabel = (build) => bayList(build).map(bayDisplayName).join(', ');
+
+// Neutral note in the modal when this active build shares any of its bays with
+// another active build. Sharing a bay is a legitimate way the floor operates, so
+// this is informational — not the warning it used to be.
+function baySharedNote(build) {
+  if (build.status !== 'active') return '';
+  const mine = bayList(build);
+  if (!mine.length) return '';
+  const others = state.builds.filter((b) => b.id !== build.id && b.status === 'active'
+    && b.lineId === build.lineId && bayList(b).some((v) => mine.includes(v)));
   if (!others.length) return '';
-  const line = state.lines.find((l) => l.id === build.lineId);
-  return `<div class="bay-warning">⚠ Bay ${esc(String(build.bay))} on ${esc(line?.name || 'this line')} is also assigned to ${others.map((o) => esc(o.name || 'another build')).join(', ')}. Two active builds can't occupy the same bay.</div>`;
+  const overlap = [...new Set(others.flatMap((o) => bayList(o).filter((v) => mine.includes(v))))];
+  return `<div class="bay-shared">Sharing ${esc(overlap.map(bayDisplayName).join(', '))} with ${others.map((o) => esc(o.name || 'another build')).join(', ')}.</div>`;
 }
 
-// Bays derive from a line's capacity: capacity N → Bay 1..N. Returns <option> html.
-function bayOptions(build) {
+// Bay pickers are multi-select now: a build can be ticked into several bays.
+function bayCheckboxes(build) {
   const line = state.lines.find((l) => l.id === build.lineId);
   const cap = Math.max(1, line?.capacity || 1);
-  let html = `<option value="" ${!build.bay ? 'selected' : ''}>— Unassigned —</option>`;
-  for (let i = 1; i <= cap; i++) {
-    html += `<option value="${i}" ${String(build.bay) === String(i) ? 'selected' : ''}>Bay ${i}</option>`;
-  }
+  const current = new Set(bayList(build));
+  const opts = [];
+  for (let i = 1; i <= cap; i++) opts.push({ v: String(i), label: `Bay ${i}` });
   // The Long Line has an extra half-size Spray Foam bay between Bay 3 and Bay 4.
   const isLong = line && SHOP_LINES[0].match.some((m) => (line.name || '').toLowerCase().includes(m) || line.id.toLowerCase().includes(m));
-  if (isLong) {
-    html += `<option value="sf" ${String(build.bay) === 'sf' ? 'selected' : ''}>Spray Foam</option>`;
-  }
-  // Named one-off bays (e.g. Trailer) belong to whichever line owns them, so they
-  // only appear for that line — otherwise a build could be parked in a bay that
-  // isn't drawn anywhere near its own line.
+  if (isLong) opts.push({ v: 'sf', label: 'Spray Foam' });
+  // Named one-off bays (e.g. Trailer) only appear for the line that owns them,
+  // otherwise a build could be parked somewhere not drawn near its own line.
   for (const x of SHOP_EXTRA_BAYS) {
     const owner = SHOP_LINES.find((d) => d.key === x.lineKey);
     const belongs = line && owner && owner.match.some((m) => (line.name || '').toLowerCase().includes(m) || line.id.toLowerCase().includes(m));
-    if (belongs) {
-      html += `<option value="${x.id}" ${String(build.bay) === x.id ? 'selected' : ''}>${esc(x.title)}</option>`;
-    }
+    if (belongs) opts.push({ v: String(x.id), label: x.title });
   }
-  return html;
+  return `<div class="bay-pick">
+    ${opts.map((o) => `<label class="bay-pick-opt ${current.has(o.v) ? 'on' : ''}">
+      <input type="checkbox" data-bay-toggle="${esc(o.v)}" ${current.has(o.v) ? 'checked' : ''}>
+      <span>${esc(o.label)}</span></label>`).join('')}
+    <span class="bay-pick-hint">${current.size ? esc(bayListLabel(build)) : 'Unassigned'}</span>
+  </div>`;
 }
 
-// Which (lineId, bay) pairs have more than one ACTIVE build assigned? Returns a
-// Set of "lineId::bay" keys plus a map of conflicting build ids for messaging.
+// Which (lineId, bay) pairs hold more than one ACTIVE build. Sharing is allowed,
+// so these are reported as *shared* rather than as conflicts, and consumers style
+// them neutrally.
 function bayConflicts() {
   const byBay = {};
   for (const b of state.builds) {
-    if (b.status !== 'active' || !b.bay) continue;
-    const key = `${b.lineId}::${b.bay}`;
-    (byBay[key] ||= []).push(b);
+    if (b.status !== 'active') continue;
+    for (const v of bayList(b)) (byBay[`${b.lineId}::${v}`] ||= []).push(b);
   }
-  const conflicts = new Set();
-  for (const [key, arr] of Object.entries(byBay)) if (arr.length > 1) conflicts.add(key);
-  return { conflicts, byBay };
+  const shared = new Set();
+  for (const [key, arr] of Object.entries(byBay)) if (arr.length > 1) shared.add(key);
+  return { conflicts: shared, shared, byBay };
 }
 
 function riskMeta(risk) {
@@ -461,7 +495,7 @@ function renderDashboard() {
             ${activeForecast.map((b) => { const f = byId[b.id]; const m = riskMeta(f?.risk); return `
               <tr data-open="${b.id}">
                 <td class="td-name">${esc(b.name)}<span class="td-sub">${esc(b.client || '')}</span></td>
-                <td>${esc(lineName(b.lineId))}${b.bay ? ` · Bay ${esc(String(b.bay))}` : ''}</td>
+                <td>${esc(lineName(b.lineId))}${bayList(b).length ? ` · ${esc(bayListLabel(b))}` : ''}</td>
                 <td class="td-timeline">${miniTimeline(b, proj[b.id]) || '<span class="td-sub">no start</span>'}</td>
                 <td>${fmtDate(b.targetShip)}</td>
                 <td>${fmtDate(f?.projectedShip)}</td>
@@ -481,7 +515,8 @@ function renderDashboard() {
             const { conflicts } = bayConflicts();
             const bayMap = {};
             for (const b of state.builds) {
-              if (b.status === 'active' && b.lineId === c.lineId && b.bay) (bayMap[b.bay] ||= []).push(b);
+              if (b.status !== 'active' || b.lineId !== c.lineId) continue;
+              for (const v of bayList(b)) (bayMap[v] ||= []).push(b);
             }
             const filled = Object.keys(bayMap).length;
             const fillPct = Math.round(filled / capacity * 100);
@@ -751,7 +786,7 @@ function renderBoard() {
       <div class="b-zone" data-status="${col.id}">${items.map((b) => {
         const f = forecastBuild(b, state.stages, calendar(), state.today); const m = riskMeta(f.risk);
         const done = state.stages.filter((s) => (b.stageProgress?.[s.id] || 0) >= 1).length;
-        const bayLabel = b.bay ? ` · Bay ${esc(String(b.bay))}` : '';
+        const bayLabel = bayList(b).length ? ` · ${esc(bayListLabel(b))}` : '';
         return `<div class="b-card" draggable="true" data-card="${b.id}" data-open="${b.id}">
           <div class="b-card-top"><span class="b-id">${esc(b.moduleType || '')}</span><span class="badge" style="background:${m.color}">${m.label}</span></div>
           <div class="b-name">${esc(b.name)}</div><div class="b-client">${esc(b.client || '')}</div>
@@ -819,6 +854,76 @@ function resolveShopLine(def, usedIds) {
   const byName = state.lines.find((l) => !usedIds.has(l.id) && def.match.some((m) => (l.name || '').toLowerCase().includes(m) || l.id.toLowerCase().includes(m)));
   if (byName) return byName;
   return state.lines.find((l) => !usedIds.has(l.id)) || null;
+}
+
+// Ordered bay cells for a line, left to right, including the half-width Spray Foam
+// bay and any one-off bays (Trailer) the line owns. Folding the extras in here
+// rather than rendering them separately means lane allocation sees every cell, so
+// a shared bay divides consistently across the whole row.
+function shopCells(def) {
+  const region = def.region;
+  const bayWidth = UNIFORM_BAY_WIDTH;
+  const cells = [];
+  for (let i = 0; i < def.bays; i++) {
+    const n = i + 1;
+    cells.push({ id: n, label: String(n), title: `Bay ${n}`, left: region.right - bayWidth * n, width: bayWidth });
+  }
+  if (def.sprayFoam) {
+    const sfWidth = bayWidth / 2;
+    const boundary = region.right - bayWidth * 3; // left edge of Bay 3
+    for (const c of cells) if (c.id >= 4) c.left -= sfWidth;
+    cells.push({ id: 'sf', label: 'SF', title: 'Spray Foam', sprayFoam: true, left: boundary - sfWidth, width: sfWidth });
+  }
+  for (const x of SHOP_EXTRA_BAYS.filter((e) => e.lineKey === def.key)) {
+    cells.push({ id: x.id, label: x.label, title: x.title, modifier: x.modifier, left: region.right, width: bayWidth });
+  }
+  cells.sort((a, b) => a.left - b.left);
+  return cells;
+}
+
+// Split cell indices into contiguous runs, so a build occupying adjacent bays
+// draws as one wide box rather than several boxes side by side.
+function contiguousRuns(idxs) {
+  const s = [...idxs].sort((a, b) => a - b);
+  if (!s.length) return [];
+  const runs = [];
+  let run = [s[0]];
+  for (let k = 1; k < s.length; k++) {
+    if (s[k] === s[k - 1] + 1) run.push(s[k]);
+    else { runs.push(run); run = [s[k]]; }
+  }
+  runs.push(run);
+  return runs;
+}
+
+// Greedy lane allocation. Each build takes the lowest lane free across EVERY cell
+// it occupies, which is what keeps a spanning build a single rectangle instead of
+// stair-stepping between lanes. laneCount is the highest simultaneous occupancy
+// anywhere in the line and sets the slot height, so every bay in a line divides
+// the same way and the row stays on a single grid.
+function allocateLanes(builds, cells) {
+  const indexOf = new Map(cells.map((c, i) => [String(c.id), i]));
+  const cellsOf = (b) => [...new Set(bayList(b).map((v) => indexOf.get(v)).filter((v) => v !== undefined))];
+  const taken = [];
+  const placed = [];
+  const ordered = [...builds].sort((a, b) => {
+    const ia = cellsOf(a), ib = cellsOf(b);
+    const fa = ia.length ? Math.min(...ia) : Number.MAX_SAFE_INTEGER;
+    const fb = ib.length ? Math.min(...ib) : Number.MAX_SAFE_INTEGER;
+    return fa - fb || String(a.id).localeCompare(String(b.id));
+  });
+  for (const b of ordered) {
+    const mine = cellsOf(b);
+    if (!mine.length) continue;
+    let lane = 0;
+    for (;; lane++) {
+      taken[lane] ||= new Set();
+      if (!mine.some((i) => taken[lane].has(i))) break;
+    }
+    mine.forEach((i) => taken[lane].add(i));
+    placed.push({ build: b, lane, runs: contiguousRuns(mine) });
+  }
+  return { placed, laneCount: Math.max(1, taken.length), taken };
 }
 
 // ----------------------------- Build Hours (matrix) -----------------------------
@@ -1318,86 +1423,78 @@ function exportBuildHoursMatrix(rows) {
   a.download = `traveler-build-hours-matrix-${state.today}.csv`; a.click(); URL.revokeObjectURL(a.href);
 }
 
+// Id of the build currently being dragged in the Shop Overview, mirroring
+// bayDragId for the dashboard's Line Capacity panel.
+let shopDragId = null;
+
 function renderShopOverview() {
   const usedIds = new Set();
   const lineMap = SHOP_LINES.map((def) => { const line = resolveShopLine(def, usedIds); if (line) usedIds.add(line.id); return { def, line }; });
 
   const overlays = lineMap.map(({ def, line }) => {
     const region = def.region;
-    const bayWidth = UNIFORM_BAY_WIDTH;
     const pad = 0.8;
     const topExtra = def.bandTopExtra || 0; // extra upward coverage to hide drawing lines above the bays
+    const cells = shopCells(def);
 
-    // Build the list of bay descriptors: {id, label, left, width}. Numbered
-    // right-to-left (Bay 1 rightmost).
-    const cellDefs = [];
-    for (let i = 0; i < def.bays; i++) {
-      const bayNum = i + 1;
-      cellDefs.push({ id: bayNum, label: String(bayNum), left: region.right - bayWidth * bayNum, width: bayWidth });
-    }
-    // A half-width Spray Foam bay is inserted at the Bay 3 / Bay 4 boundary.
-    // Bays 4-10 shift left by that half-bay to make room, so the cells stay
-    // contiguous and the physical order matches the floor.
-    if (def.sprayFoam) {
-      const sfWidth = bayWidth / 2;
-      const boundary = region.right - bayWidth * 3; // left edge of Bay 3 = start of the 3/4 gap
-      for (const c of cellDefs) if (c.id >= 4) c.left -= sfWidth; // shift the higher-numbered bays left
-      cellDefs.push({ id: 'sf', label: 'SF', sprayFoam: true, left: boundary - sfWidth, width: sfWidth });
-    }
+    // Every non-complete build with at least one bay on this line. A build may
+    // appear across several cells; allocateLanes works out where it sits.
+    const occupants = line
+      ? state.builds.filter((b) => b.lineId === line.id && b.status !== 'complete' && bayList(b).length)
+      : [];
+    const { placed, laneCount, taken } = allocateLanes(occupants, cells);
 
     // The masking band blankets the bay strip, hiding the busy floor-plan detail
-    // behind it. Derive it from where the cells ACTUALLY are rather than from
-    // the region: with a uniform bay width the strip no longer necessarily fills
-    // region.left..region.right, and the Long Line's inserted Spray Foam bay
-    // pushes bays 4-10 half a bay past region.left. Measuring the cells means
-    // the band always covers them, with no special case per line.
-    const stripLeft = Math.min(...cellDefs.map((c) => c.left));
-    const stripRight = Math.max(...cellDefs.map((c) => c.left + c.width));
+    // behind it. Derived from where the cells ACTUALLY are rather than from the
+    // region, because the inserted Spray Foam bay pushes bays 4-10 half a bay past
+    // region.left and the Trailer bay hangs off the right end.
+    const stripLeft = Math.min(...cells.map((c) => c.left));
+    const stripRight = Math.max(...cells.map((c) => c.left + c.width));
     const band = `<div class="shop-band" style="left:${stripLeft - pad}%;top:${region.top - pad - topExtra}%;width:${stripRight - stripLeft + pad * 2}%;height:${region.bottom - region.top + pad * 2 + topExtra}%"></div>`;
 
-    const cells = cellDefs.map((c) => {
-      const build = line ? state.builds.find((b) => b.lineId === line.id && String(b.bay) === String(c.id) && b.status !== 'complete') : null;
-      const f = build ? forecastBuild(build, state.stages, calendar(), state.today) : null;
-      const color = f ? riskMeta(f.risk).color : '';
-      const bayTitle = c.sprayFoam ? 'Spray Foam' : `Bay ${c.id}`;
-      return `<div class="shop-bay ${build ? 'occupied' : 'empty'} ${c.sprayFoam ? 'spray-foam' : ''}"
-        style="left:${c.left}%;top:${region.top}%;width:${c.width}%;height:${region.bottom - region.top}%;${build ? `--bay-color:${color}` : ''}"
-        data-shop-bay="${c.id}" data-shop-line="${line ? line.id : ''}" data-build="${build ? build.id : ''}"
-        title="${line ? esc(line.name) : def.label} · ${bayTitle}${build ? ' · ' + esc(build.name) : ' · open'}">
-        <span class="shop-bay-num">${c.label}</span>
-        ${build ? `<span class="shop-bay-build">${esc(build.name || 'Untitled')}</span>` : `<span class="shop-bay-open">${c.sprayFoam ? 'foam' : 'open'}</span>`}
-      </div>`;
-    }).join('');
-    return band + cells;
-  }).join('');
+    const laneH = (region.bottom - region.top) / laneCount;
+    const compact = laneCount > 1 ? ' compact' : '';
 
-  // Extra one-off bays, rendered with the same markup and classes as line bays so
-  // they pick up identical styling, hover, occupancy colours and click handling.
-  // Geometry is derived from the owning line: standard bay width, that line's
-  // vertical extent, butted immediately outboard of Bay 1.
-  const extraBays = SHOP_EXTRA_BAYS.map((x) => {
-    const owner = lineMap.find(({ def }) => def.key === x.lineKey);
-    if (!owner) return '';
-    const line = owner.line;
-    const r = owner.def.region;
-    const left = r.right;
-    const width = UNIFORM_BAY_WIDTH;
-    const top = r.top;
-    const height = r.bottom - r.top;
-    const build = line ? state.builds.find((b) => b.lineId === line.id && String(b.bay) === String(x.id) && b.status !== 'complete') : null;
-    const f = build ? forecastBuild(build, state.stages, calendar(), state.today) : null;
-    const color = f ? riskMeta(f.risk).color : '';
-    const pad = 0.8;
-    const topExtra = x.bandTopExtra || 0;
-    const band = `<div class="shop-band" style="left:${left - pad}%;top:${top - pad - topExtra}%;width:${width + pad * 2}%;height:${height + pad * 2 + topExtra}%"></div>`;
-    const cell = `<div class="shop-bay ${build ? 'occupied' : 'empty'} ${x.modifier}"
-      style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;${build ? `--bay-color:${color}` : ''}"
-      data-shop-bay="${x.id}" data-shop-line="${line ? line.id : ''}" data-build="${build ? build.id : ''}"
-      title="${line ? esc(line.name) : ''} · ${esc(x.title)}${build ? ' · ' + esc(build.name) : ' · open'}">
-      <span class="shop-bay-num">${esc(x.label)}</span>
-      ${build ? `<span class="shop-bay-build">${esc(build.name || 'Untitled')}</span>` : '<span class="shop-bay-open">open</span>'}
-    </div>`;
-    return band + cell;
+    // Any (cell, lane) with nothing in it stays a clickable, droppable open slot,
+    // so adding a second build to an already-occupied bay is just a click or a drop
+    // onto the free lane beside it.
+    const slots = cells.map((c, i) => {
+      let out = '';
+      for (let lane = 0; lane < laneCount; lane++) {
+        if (taken[lane]?.has(i)) continue;
+        out += `<div class="shop-bay empty${compact} ${c.sprayFoam ? 'spray-foam' : ''} ${c.modifier || ''}"
+          style="left:${c.left}%;top:${region.top + lane * laneH}%;width:${c.width}%;height:${laneH}%"
+          data-shop-bay="${c.id}" data-shop-line="${line ? line.id : ''}" data-bay-drop="${c.id}" data-build=""
+          title="${line ? esc(line.name) : def.label} · ${esc(c.title)} · open">
+          <span class="shop-bay-num">${c.label}</span>
+          <span class="shop-bay-open">${c.sprayFoam ? 'foam' : 'open'}</span>
+        </div>`;
+      }
+      return out;
+    }).join('');
+
+    // One box per contiguous run, so a build spanning bays 8-7 is a single wide
+    // box labelled "8-7" rather than two boxes that happen to touch.
+    const boxes = placed.map(({ build, lane, runs }) => runs.map((run) => {
+      const first = cells[run[0]];
+      const last = cells[run[run.length - 1]];
+      const width = (last.left + last.width) - first.left;
+      const f = forecastBuild(build, state.stages, calendar(), state.today);
+      const color = riskMeta(f.risk).color;
+      const runLabel = run.map((i) => cells[i].label).join('–');
+      const spanNote = run.length > 1 ? `${run.length} bays` : '';
+      return `<div class="shop-bay occupied${compact} shop-build" draggable="true"
+        style="left:${first.left}%;top:${region.top + lane * laneH}%;width:${width}%;height:${laneH}%;--bay-color:${color}"
+        data-shop-bay="${first.id}" data-shop-line="${line.id}" data-bay-drop="${first.id}"
+        data-build="${build.id}" data-bay-build="${build.id}"
+        title="${esc(line.name)} · ${esc(bayListLabel(build))} · ${esc(build.name || 'Untitled')} — drag to move, hold Shift to add a bay">
+        <span class="shop-bay-num">${runLabel}</span>
+        <span class="shop-bay-build">${esc(build.name || 'Untitled')}</span>
+        ${spanNote ? `<span class="shop-bay-open">${spanNote}</span>` : ''}
+      </div>`;
+    }).join('')).join('');
+
+    return band + slots + boxes;
   }).join('');
 
   const legendItems = [['on-track', 'On Track'], ['at-risk', 'At Risk'], ['late', 'Late'], ['shipped', 'Shipped']];
@@ -1415,18 +1512,78 @@ function renderShopOverview() {
         <img src="./assets/shop-floor.jpg" alt="Shop floor plan" class="shop-img"
           onerror="this.classList.add('img-missing');this.closest('.shop-map').classList.add('no-img');">
         <div class="shop-img-missing">Floor plan image not found. Place <code>shop-floor.jpg</code> in a <code>src/assets/</code> folder next to index.html, then refresh. Bays are still clickable below.</div>
-        ${overlays}${extraBays}
+        ${overlays}
       </div>
     </div>
 `;
 
-  $('#shopRoot').querySelectorAll('[data-shop-bay]').forEach((cell) => {
+  const root = $('#shopRoot');
+
+  root.querySelectorAll('[data-shop-bay]').forEach((cell) => {
     cell.addEventListener('click', () => {
       const buildId = cell.dataset.build;
       if (buildId) { openBuild(buildId); return; }
-      // Empty bay: offer to place a build here — open a picker of unassigned builds.
+      // Empty slot: offer to place a build here — open a picker of unassigned builds.
       openBayPicker(cell.dataset.shopLine, cell.dataset.shopBay);
     });
+  });
+
+  // ---- Drag a build between bays -------------------------------------------
+  // Plain drop = MOVE (the build's bay set becomes just the target).
+  // Shift+drop = ADD the target bay, which is how a build comes to span several
+  // bays or to join a bay another build is already in.
+  // Dropping onto another build's box targets that box's own bay, so you can drop
+  // straight onto an occupied bay to share it rather than aiming at a thin slot.
+  root.addEventListener('dragstart', (e) => {
+    const box = e.target.closest('[data-bay-build]');
+    if (!box) return;
+    shopDragId = box.dataset.bayBuild;
+    box.classList.add('dragging');
+    try {
+      e.dataTransfer.effectAllowed = 'all';
+      e.dataTransfer.setData('text/plain', shopDragId);
+    } catch { /* older browsers */ }
+  });
+  root.addEventListener('dragend', () => {
+    shopDragId = null;
+    root.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+    root.querySelectorAll('.drop-hover').forEach((el) => el.classList.remove('drop-hover'));
+  });
+  root.addEventListener('dragover', (e) => {
+    const slot = e.target.closest('[data-bay-drop]');
+    if (!slot || !shopDragId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = e.shiftKey ? 'copy' : 'move';
+    root.querySelectorAll('.drop-hover').forEach((el) => el.classList.remove('drop-hover'));
+    slot.classList.add(e.shiftKey ? 'drop-hover-add' : 'drop-hover');
+    if (!e.shiftKey) slot.classList.remove('drop-hover-add');
+  });
+  root.addEventListener('dragleave', (e) => {
+    const slot = e.target.closest('[data-bay-drop]');
+    if (slot) { slot.classList.remove('drop-hover'); slot.classList.remove('drop-hover-add'); }
+  });
+  root.addEventListener('drop', async (e) => {
+    const slot = e.target.closest('[data-bay-drop]');
+    if (!slot || !shopDragId) return;
+    e.preventDefault();
+    const id = shopDragId;
+    shopDragId = null;
+    root.querySelectorAll('.drop-hover,.drop-hover-add,.dragging')
+      .forEach((el) => el.classList.remove('drop-hover', 'drop-hover-add', 'dragging'));
+
+    const build = state.builds.find((b) => b.id === id);
+    if (!build) return;
+    const targetLine = slot.dataset.shopLine;
+    const targetBay = slot.dataset.bayDrop;
+    // Bay ids are only meaningful within a line, so moving across lines starts the
+    // bay set fresh rather than carrying the old line's bay numbers over.
+    const sameLine = build.lineId === targetLine;
+    const current = sameLine ? bayList(build) : [];
+    if (sameLine && e.shiftKey && current.includes(String(targetBay))) return; // already there
+    const next = e.shiftKey ? [...current, targetBay] : [targetBay];
+    const patch = bayPatch(next);
+    if (!sameLine) patch.lineId = targetLine;
+    await patchBuild(id, patch);
   });
 }
 
@@ -1437,7 +1594,10 @@ function openBayPicker(lineId, bay) {
   const lineTitle = line ? esc(line.name) : 'this line';
   const extra = SHOP_EXTRA_BAYS.find((x) => x.id === bay);
   const bayLabel = extra ? `${extra.title} bay` : bay === 'sf' ? 'Spray Foam bay' : `Bay ${bay}`;
-  const candidates = state.builds.filter((b) => b.status !== 'complete' && (b.lineId !== lineId || String(b.bay) !== String(bay)));
+  // Anything not already in THIS bay is a candidate — a build already on the line
+  // can still be added to another bay, which is how spanning gets set up by click.
+  const candidates = state.builds.filter((b) => b.status !== 'complete'
+    && !(b.lineId === lineId && bayList(b).includes(String(bay))));
 
   const body = candidates.length
     ? `<div class="bp-list">${candidates.map((b) => {
@@ -1446,7 +1606,7 @@ function openBayPicker(lineId, bay) {
         return `<button class="bp-row" data-place-build="${b.id}">
           <span class="bp-dot" style="background:${m.color}"></span>
           <span class="bp-name">${esc(b.name || 'Untitled')}</span>
-          <span class="bp-meta">${esc(lineName(b.lineId))}${b.bay ? ' · Bay ' + esc(String(b.bay)) : ' · unassigned'}</span>
+          <span class="bp-meta">${esc(lineName(b.lineId))}${bayList(b).length ? ' · ' + esc(bayListLabel(b)) : ' · unassigned'}</span>
         </button>`;
       }).join('')}</div>`
     : `<div class="bp-empty">No builds available to place here. Create a build first, then assign it to this bay.</div>`;
@@ -1464,7 +1624,15 @@ function openBayPicker(lineId, bay) {
       // future SHOP_EXTRA_BAYS id) must stay strings. Number('trailer') is NaN,
       // which would have written a broken bay value and lost the assignment.
       const targetBay = /^\d+$/.test(String(bay)) ? Number(bay) : String(bay);
-      patchBuild(btn.dataset.placeBuild, { lineId, bay: targetBay });
+      // A build already on this line keeps its existing bays and gains this one,
+      // so clicking successive empty bays is how you build up a span. Coming from
+      // another line, bay numbers don't carry over, so the set starts fresh.
+      const b = state.builds.find((x) => x.id === btn.dataset.placeBuild);
+      const sameLine = b && b.lineId === lineId;
+      const next = sameLine ? [...bayList(b), targetBay] : [targetBay];
+      const patch = bayPatch(next);
+      if (!sameLine) patch.lineId = lineId;
+      patchBuild(btn.dataset.placeBuild, patch);
       closeBayPicker();
     });
   });
@@ -2143,7 +2311,7 @@ function renderBuildModal() {
         <label class="field"><span>Client</span><input value="${esc(b.client || '')}" data-field="client"></label>
         <label class="field"><span>Module type</span><select data-field="moduleType"><option value="">— None —</option>${(state.settings.moduleTypes || []).map((t) => `<option ${b.moduleType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
         <label class="field"><span>Production line</span><select data-field="lineId">${state.lines.map((l) => `<option value="${l.id}" ${b.lineId === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
-        <label class="field"><span>Bay</span><select data-field="bay">${bayOptions(b)}</select></label>
+        <label class="field"><span>Bays</span>${bayCheckboxes(b)}</label>
         <label class="field"><span>Status</span><select data-field="status">${['pipeline', 'confirmed', 'active', 'complete'].map((s) => `<option ${b.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
         <label class="field"><span>Start date <em class="hint">(confirmed / actual)</em></span><input type="date" value="${b.confirmedStart || ''}" data-field="startDate"></label>
         <label class="field"><span>Tentative start</span><input type="date" value="${b.tentativeStart || ''}" data-field="tentativeStart"></label>
@@ -2151,7 +2319,7 @@ function renderBuildModal() {
         <label class="field"><span>Priority</span><input type="number" value="${b.priority ?? 100}" data-field="priority"></label>
         <label class="field"><span>Projected build hours</span><input type="number" min="0" step="0.5" value="${b.projectedHours ?? ''}" data-field="projectedHours" placeholder="e.g. 320"></label>
       </div>
-      ${bayConflictWarning(b)}
+      ${baySharedNote(b)}
 
       <div class="section-head"><h3>Production Stages</h3><div class="section-head-actions"><button class="btn sm" id="completeAllStages" type="button">Complete all</button><span class="td-sub" id="stageTotalNote">${dur} planned working days total</span></div></div>
       <div class="stage-list-head"><span></span><span style="text-align:left">Stage</span><span>Days</span><span>Hrs</span><span>Progress</span><span></span></div>
@@ -2397,7 +2565,9 @@ function wireGlobalEvents() {
     const targetLine = slot.dataset.bayLine;
     const targetBay = Number(slot.dataset.bayDrop);
     // Moving across lines reassigns the build's line too, so the bay stays valid.
-    const patch = { bay: targetBay };
+    // The Line Capacity panel is a single-bay view, so a drop here MOVES the build
+    // to one bay — use the Shop Overview if you want to span or share.
+    const patch = bayPatch([targetBay]);
     if (build && build.lineId !== targetLine) patch.lineId = targetLine;
     await patchBuild(bayDragId, patch);
     bayDragId = null;
@@ -2479,6 +2649,17 @@ function wireGlobalEvents() {
       await patchBuild(id, { inspectionData: data });
       return;
     }
+    // Bay assignment is multi-select now, so rebuild the whole set from the ticked
+    // boxes rather than patching one value. Reading the DOM (not the previous
+    // state) keeps rapid successive clicks from racing each other.
+    if (e.target.matches('[data-bay-toggle]')) {
+      const chosen = [...$('#buildModal').querySelectorAll('[data-bay-toggle]')]
+        .filter((el) => el.checked)
+        .map((el) => el.dataset.bayToggle);
+      await patchBuild(id, bayPatch(chosen));
+      renderBuildModal(); // refresh the shared-bay note and the summary line
+      return;
+    }
     const field = e.target.dataset.field;
     if (field) {
       let v = e.target.value;
@@ -2521,10 +2702,9 @@ function wireGlobalEvents() {
         return;
       }
       // Changing status to/from active, or changing the line (which changes the
-      // available bays), re-renders so bay options and warnings stay correct.
+      // available bays), re-renders so bay options and notes stay correct.
       const wasStatus = field === 'status';
       const wasLine = field === 'lineId';
-      if (field === 'bay') v = v || null;
       await patchBuild(id, { [field]: v });
       if (wasStatus || wasLine) renderBuildModal();
       return;
