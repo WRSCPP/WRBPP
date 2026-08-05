@@ -643,3 +643,147 @@ export function simulateShop({
     boothWaitPulses: boothWaitTotal,
   };
 }
+
+// ----------------------------- Cycle day plan -----------------------------
+/**
+ * planCycle — turn a pulse's worth of work into a bay x day grid, the shape of the
+ * paper Build Schedule the shop already runs on.
+ *
+ * The point is not to reproduce that sheet but to GENERATE it, because generating
+ * it catches the thing paper cannot: a crew committed to two bays on the same day.
+ * On the current sheet "Hang Drywall - IA" appears in Long Bay 4 every day of the
+ * cycle and in Short Bay 3 on three of them, while the crew legend lists one IA.
+ * That over-commitment is invisible on paper and is exactly what shows up here as
+ * a conflict.
+ *
+ * Deliberately dumb about work content: callers pass tasks already resolved to
+ * { station, role, hours }. Deciding how a stage maps to crews and hours depends on
+ * data that lives in the app, so making that decision here would bury a guess in
+ * the middle of otherwise verifiable arithmetic.
+ *
+ * Two packing strategies, because the obvious one is wrong:
+ *
+ *   'earliest'  first-fit from day 1. Simple, and it FRONT-LOADS badly — on a real
+ *               cycle it produced 240% / 104% / 48% / 40% day utilisation, piling
+ *               everything onto day one. Kept only for comparison.
+ *   'level'     (default) each task goes to the day with the most remaining
+ *               capacity for its role, which spreads work the way the paper sheet
+ *               does. Within a station tasks stay non-decreasing in day, so a bay's
+ *               own sequence is never violated even though bays level independently.
+ *
+ * Greedy either way, on purpose — a plan a lead can follow and argue with beats a
+ * marginally shorter one nobody can explain.
+ *
+ * tasks:        [{ id, station, role, hours, label?, buildId?, order? }]
+ * daysPerPulse: working days in one pulse (4 on this floor: We, Th, Mo, Tu)
+ * capacityFor:  (role, day) -> hours available that day across the whole shop
+ */
+export function planCycle({ tasks, daysPerPulse = 4, capacityFor, stationCapacityFor = null, strategy = 'level' }) {
+  const days = Array.from({ length: daysPerPulse }, (_, i) => i + 1);
+
+  // Remaining capacity per role per day, and optionally per station per day, so a
+  // single bay cannot be loaded past what one bay's worth of people can do.
+  const roleLeft = new Map();
+  const stationLeft = new Map();
+  const roleCap = new Map();
+  const rkey = (role, day) => `${role}::${day}`;
+  const skey = (station, day) => `${station}::${day}`;
+
+  const ordered = [...tasks].sort((a, b) =>
+    (a.order ?? 0) - (b.order ?? 0) || String(a.station).localeCompare(String(b.station)));
+
+  const cells = new Map();      // "station::day" -> [allocation]
+  const stationFloor = new Map(); // station -> earliest day a new task may use
+  const unplanned = [];
+  const conflicts = [];
+
+  for (const t of ordered) {
+    let remaining = Number(t.hours) || 0;
+    if (remaining <= 0) {
+      // Zero-hour tasks still belong on the plan so the lead sees them.
+      const k = skey(t.station, 1);
+      if (!cells.has(k)) cells.set(k, []);
+      cells.get(k).push({ ...t, day: 1, hours: 0 });
+      continue;
+    }
+    // A bay's own sequence must hold: never place a task earlier than the last day
+    // already used by an earlier task at the same station.
+    const floorDay = stationFloor.get(t.station) || 1;
+    const allowed = days.filter((d) => d >= floorDay);
+    const ensure = (day) => {
+      const rk = rkey(t.role, day);
+      if (!roleLeft.has(rk)) {
+        const cap = Number(capacityFor(t.role, day)) || 0;
+        roleLeft.set(rk, cap); roleCap.set(rk, cap);
+      }
+      let avail = roleLeft.get(rk);
+      if (stationCapacityFor) {
+        const sk = skey(t.station, day);
+        if (!stationLeft.has(sk)) stationLeft.set(sk, Number(stationCapacityFor(t.station, day)) || Infinity);
+        avail = Math.min(avail, stationLeft.get(sk));
+      }
+      return avail;
+    };
+    // 'level' visits the emptiest allowed day first so work spreads; 'earliest'
+    // keeps the original first-fit order.
+    const visitOrder = strategy === 'earliest'
+      ? allowed
+      : [...allowed].sort((a, b) => (ensure(b) - ensure(a)) || (a - b));
+
+    for (const day of visitOrder) {
+      if (remaining <= 0) break;
+      const avail = ensure(day);
+      if (avail <= 0) continue;
+      const rk = rkey(t.role, day);
+      const take = Math.min(remaining, avail);
+      roleLeft.set(rk, roleLeft.get(rk) - take);
+      if (stationCapacityFor) stationLeft.set(skey(t.station, day), stationLeft.get(skey(t.station, day)) - take);
+      const k = skey(t.station, day);
+      if (!cells.has(k)) cells.set(k, []);
+      cells.get(k).push({ ...t, day, hours: take, split: take < (Number(t.hours) || 0) });
+      remaining -= take;
+      if (day > (stationFloor.get(t.station) || 1)) stationFloor.set(t.station, day);
+    }
+    if (remaining > 0) unplanned.push({ ...t, shortfallHours: remaining });
+  }
+
+  // Over-commitment report: a role whose demand across the cycle exceeded supply.
+  const demand = new Map();
+  for (const t of tasks) {
+    const h = Number(t.hours) || 0;
+    demand.set(t.role, (demand.get(t.role) || 0) + h);
+  }
+  for (const [role, wanted] of demand) {
+    let supply = 0;
+    for (const day of days) supply += Number(capacityFor(role, day)) || 0;
+    if (wanted > supply + 1e-9) {
+      conflicts.push({ role, demandHours: wanted, capacityHours: supply, shortfallHours: wanted - supply });
+    }
+  }
+
+  // Per-day utilisation, so an unbalanced cycle is visible at a glance.
+  //
+  // Capacity is the WHOLE shop's capacity for that day, across every role appearing
+  // in the task list. An earlier version summed only the roles that happened to be
+  // examined on that day, which undercounted the denominator whenever a task was
+  // pushed later by station sequencing — and reported utilisation above 100%, which
+  // is impossible by construction and a clear sign the measure was wrong.
+  const allRoles = [...new Set(tasks.map((t) => t.role))];
+  const dayLoad = days.map((day) => {
+    let cap = 0;
+    for (const role of allRoles) cap += Number(capacityFor(role, day)) || 0;
+    let used = 0;
+    for (const [k, arr] of cells) {
+      if (!k.endsWith(`::${day}`)) continue;
+      for (const a of arr) used += Number(a.hours) || 0;
+    }
+    return { day, usedHours: used, capacityHours: cap, utilisation: cap > 0 ? used / cap : 0 };
+  });
+
+  return { cells, days, unplanned, conflicts, dayLoad };
+}
+
+/** Cells for one station as a day-indexed array, for rendering a grid row. */
+export function stationRow(plan, station) {
+  return plan.days.map((day) => plan.cells.get(`${station}::${day}`) || []);
+}

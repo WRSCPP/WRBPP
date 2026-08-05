@@ -5,7 +5,7 @@
 import {
   bayPlan, seedMapping, bayHours, standardBayHours, bayCapacity,
   bayCycleDays, achievableTakt, requiredTakt, paceGap,
-  simulateLine, flowlineSeries, simulateShop,
+  simulateLine, flowlineSeries, simulateShop, planCycle, stationRow,
   stageRouting, traveledWork, moveReadyBlockers, dwellPulses,
 } from './takt.js';
 
@@ -352,6 +352,147 @@ group('shop simulation: two lines, one shared booth');
   ok('runaway dwell hits the pulse limit', capped.hitPulseLimit === true);
   s = run([{ id: 'nb', line: 'long', position: 4, needsFoam: true }], { boothCapacity: 0 });
   ok('zero booth capacity does not hang', s.hitPulseLimit === true || s.builds[0].finished === false);
+}
+
+// ----------------------------------------------------------------- cycle day plan
+group('cycle day plan (the Build Schedule grid)');
+{
+  const cap = (perDay) => () => perDay;
+  // One task, one crew of 8h/day, 4-day cycle.
+  let p = planCycle({ tasks: [{ id: 't1', station: 'L4', role: 'IA', hours: 8, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(8) });
+  ok('a one-day task lands on day 1', (p.cells.get('L4::1') || []).length === 1);
+  ok('and nowhere else', !p.cells.has('L4::2'));
+  ok('nothing unplanned', p.unplanned.length === 0);
+  ok('no conflict when supply covers demand', p.conflicts.length === 0);
+
+  // A task bigger than one day splits across days.
+  p = planCycle({ tasks: [{ id: 't2', station: 'L4', role: 'IA', hours: 20, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(8) });
+  const spread = [1,2,3,4].map((d) => (p.cells.get(`L4::${d}`) || []).reduce((s2, a) => s2 + a.hours, 0));
+  ok('splits across days', spread.filter((h) => h > 0).length === 3);
+  ok('day allocations respect capacity', spread.every((h) => h <= 8 + 1e-9));
+  ok('total allocated equals task hours', near(spread.reduce((a, b) => a + b, 0), 20));
+  ok('split allocations are flagged', (p.cells.get('L4::1') || [])[0].split === true);
+
+  // Work that cannot fit the cycle is reported, not silently dropped.
+  p = planCycle({ tasks: [{ id: 't3', station: 'L4', role: 'IA', hours: 100, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(8) });
+  ok('overflow is reported as unplanned', p.unplanned.length === 1);
+  ok('shortfall is quantified', near(p.unplanned[0].shortfallHours, 100 - 32));
+  ok('and as a role conflict', p.conflicts[0].role === 'IA');
+  ok('conflict states demand and capacity',
+    near(p.conflicts[0].demandHours, 100) && near(p.conflicts[0].capacityHours, 32));
+
+  // THE CASE FROM THE PAPER SHEET: one IA crew committed to two bays at once.
+  p = planCycle({
+    tasks: [
+      { id: 'long',  station: 'L4', role: 'IA', hours: 32, order: 1 },
+      { id: 'short', station: 'S3', role: 'IA', hours: 24, order: 2 },
+    ],
+    daysPerPulse: 4, capacityFor: cap(8),   // one person, 8h/day, 32h for the cycle
+  });
+  ok('cross-bay over-commitment is detected', p.conflicts.length === 1);
+  ok('it names the crew', p.conflicts[0].role === 'IA');
+  ok('shortfall equals the excess', near(p.conflicts[0].shortfallHours, 56 - 32));
+  ok('the first bay is fully planned',
+    near([1,2,3,4].reduce((s2, d) => s2 + (p.cells.get(`L4::${d}`) || []).reduce((a, x) => a + x.hours, 0), 0), 32));
+  ok('the second bay is what goes short', p.unplanned[0].station === 'S3');
+
+  // Different roles do not compete.
+  p = planCycle({
+    tasks: [
+      { id: 'a', station: 'L4', role: 'IA', hours: 32, order: 1 },
+      { id: 'b', station: 'S3', role: 'IB', hours: 32, order: 2 },
+    ],
+    daysPerPulse: 4, capacityFor: cap(8),
+  });
+  ok('separate crews both fit', p.unplanned.length === 0 && p.conflicts.length === 0);
+
+  // Precedence: lower order is placed first and therefore wins scarce capacity.
+  p = planCycle({
+    tasks: [
+      { id: 'late',  station: 'L4', role: 'IA', hours: 32, order: 9 },
+      { id: 'early', station: 'L4', role: 'IA', hours: 32, order: 1 },
+    ],
+    daysPerPulse: 4, capacityFor: cap(8),
+  });
+  ok('earlier stage order gets capacity first', p.unplanned[0].id === 'late');
+
+  // Per-station cap: one bay cannot absorb more than a bay's worth of people.
+  p = planCycle({
+    tasks: [{ id: 'x', station: 'L4', role: 'HS', hours: 40, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(30), stationCapacityFor: () => 8,
+  });
+  const perDay = [1,2,3,4].map((d) => (p.cells.get(`L4::${d}`) || []).reduce((s2, a) => s2 + a.hours, 0));
+  ok('station capacity caps a single bay per day', perDay.every((h) => h <= 8 + 1e-9));
+  ok('the rest overflows to unplanned', p.unplanned.length === 1);
+
+  // Utilisation per day, and zero-hour tasks still appear on the plan.
+  p = planCycle({ tasks: [{ id: 'z', station: 'L1', role: 'CS', hours: 0, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(8) });
+  ok('a zero-hour task still shows on day 1', (p.cells.get('L1::1') || []).length === 1);
+  p = planCycle({ tasks: [{ id: 'u', station: 'L4', role: 'IA', hours: 16, order: 1 }],
+    daysPerPulse: 4, capacityFor: cap(8) });
+  ok('day 1 is fully utilised', near(p.dayLoad[0].utilisation, 1));
+  ok('unused days report zero utilisation', p.dayLoad[3].usedHours === 0);
+
+  // stationRow gives a renderable row.
+  const row = stationRow(p, 'L4');
+  ok('stationRow returns one entry per day', row.length === 4);
+  ok('entries are arrays of allocations', Array.isArray(row[0]) && row[0][0].role === 'IA');
+  ok('empty days are empty arrays', Array.isArray(row[3]) && row[3].length === 0);
+
+  // Level-loading must spread work instead of front-loading it, and must still
+  // respect a bay's own sequence.
+  {
+    const cap8 = () => 8;
+    const many = [1,2,3,4].map((i) => ({ id: 'b'+i, station: 'B'+i, role: 'IA', hours: 8, order: 1 }));
+    const level = planCycle({ tasks: many, daysPerPulse: 4, capacityFor: () => 32 });
+    const perDayLevel = level.dayLoad.map((d) => d.usedHours);
+    const earliest = planCycle({ tasks: many, daysPerPulse: 4, capacityFor: () => 32, strategy: 'earliest' });
+    const perDayEarly = earliest.dayLoad.map((d) => d.usedHours);
+    ok('earliest-fit front-loads', perDayEarly[0] === 32 && perDayEarly[3] === 0);
+    ok('level spreads across days', perDayLevel.filter((h) => h > 0).length === 4);
+    ok('level uses the same total', near(perDayLevel.reduce((a,b)=>a+b,0), perDayEarly.reduce((a,b)=>a+b,0)));
+
+    // Within one station, a later-ordered task may not land before an earlier one.
+    const seq = planCycle({
+      tasks: [
+        { id: 'first',  station: 'L1', role: 'FB', hours: 8, order: 1 },
+        { id: 'second', station: 'L1', role: 'WB', hours: 8, order: 2 },
+        { id: 'third',  station: 'L1', role: 'UA', hours: 8, order: 3 },
+      ],
+      daysPerPulse: 4, capacityFor: cap8,
+    });
+    const dayOf = (id) => {
+      for (const [k, arr] of seq.cells) for (const a of arr) if (a.id === id) return a.day;
+      return null;
+    };
+    ok('station sequence is preserved under level-loading',
+      dayOf('first') <= dayOf('second') && dayOf('second') <= dayOf('third'));
+  }
+
+  // Utilisation must be a true fraction of shop capacity — never above 100%.
+  {
+    const p2 = planCycle({
+      tasks: [
+        { id: 'a', station: 'L1', role: 'FB', hours: 8,  order: 1 },
+        { id: 'b', station: 'L1', role: 'WB', hours: 8,  order: 2 },
+        { id: 'c', station: 'L2', role: 'IA', hours: 32, order: 3 },
+      ],
+      daysPerPulse: 4, capacityFor: () => 8,
+    });
+    ok('utilisation never exceeds 100%', p2.dayLoad.every((d) => d.utilisation <= 1 + 1e-9));
+    ok('capacity counts every role each day', p2.dayLoad.every((d) => d.capacityHours === 24));
+    ok('used hours equal what was actually allocated',
+      near(p2.dayLoad.reduce((s3, d) => s3 + d.usedHours, 0),
+           [...p2.cells.values()].flat().reduce((s3, a) => s3 + a.hours, 0)));
+  }
+
+  ok('no tasks yields an empty plan', planCycle({ tasks: [], daysPerPulse: 4, capacityFor: cap(8) }).cells.size === 0);
+  ok('zero capacity plans nothing and reports it',
+    planCycle({ tasks: [{ id: 'q', station: 'L1', role: 'X', hours: 8, order: 1 }], daysPerPulse: 4, capacityFor: cap(0) }).unplanned.length === 1);
 }
 
 // ----------------------------------------------------------------- flowline
