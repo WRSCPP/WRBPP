@@ -271,7 +271,33 @@ async function refresh() {
 }
 
 // ----------------------------- Derived (engine) -----------------------------
-function calendar() { return { holidays: state.settings.holidays || [] }; }
+// The shop's working week, derived from the lines' workdaysPerWeek. A 4-day week
+// means Mon-Thu, which is what this floor runs; Friday is not a production day.
+//
+// This matters because addWorkdays previously skipped only weekends, so every date
+// in the app was computed as if Friday were worked. On a 4-day week that understates
+// elapsed calendar time by 25% — two weeks on a ten-bay Long Line build.
+//
+// The most restrictive line wins, because a forecast that is too long is a nuisance
+// and one that is too short is a broken promise.
+//
+// LIMITATION: this is shop-wide, not per line. Every line here runs the same week,
+// so it is correct today. Supporting genuinely different weeks per line means
+// threading lineId through the ~19 forecast call sites, which is a larger change
+// than this one and not worth doing on speculation.
+function shopWorkdays() {
+  const counts = (state.lines || [])
+    .map((l) => Number(l.workdaysPerWeek))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 7);
+  const n = counts.length ? Math.min(...counts) : 5;
+  return Array.from({ length: n }, (_, i) => i + 1); // 1 = Monday
+}
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function workweekLabel() {
+  const wd = shopWorkdays();
+  return wd.length ? `${DAY_NAMES[wd[0]]}\u2013${DAY_NAMES[wd[wd.length - 1]]}` : '\u2014';
+}
+function calendar() { return { holidays: state.settings.holidays || [], workdays: shopWorkdays() }; }
 function projections() { return projectAll(state.builds, state.stages, calendar()); }
 
 // A compact "working-days timeline" for a single build — a small bar spanning its
@@ -2065,7 +2091,7 @@ function renderSettings() {
       <button class="btn sm primary">Add</button></form></div>`;
 
   const lineCards = `<div class="settings-card"><h3>Production Lines</h3>
-    <p class="card-hint">Capacity = builds running at once. Workdays/week sets how many days that line runs.</p>
+    <p class="card-hint">Capacity = builds running at once. Workdays/week sets how many days that line runs \u2014 the shop is currently scheduling <strong>${workweekLabel()}</strong>, and all dates are calculated on that week.</p>
     <div class="line-edit-list">
     ${state.lines.map((l) => `<div class="line-edit-row" data-line-row="${l.id}">
       <input class="le-name" value="${esc(l.name)}" data-line-field="name" data-line-id="${l.id}" title="Line name">

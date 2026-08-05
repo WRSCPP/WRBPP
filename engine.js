@@ -67,14 +67,30 @@ export function isWeekend(iso) {
   return day === 0 || day === 6;
 }
 
+// Which weekdays are production days. `calendar.workdays` is a set of day numbers
+// (0 = Sunday), so a Mon-Thu shop passes [1,2,3,4]. Defaults to Mon-Fri, which is
+// why every existing caller and test behaves exactly as before.
+//
+// This exists because addWorkdays used to skip only weekends. A line configured for
+// 4 days a week had its dates computed as if Friday were worked, so every forecast
+// ran short on calendar time by the ratio of the two weeks — 25% for a 4-day shop,
+// which is two weeks on a ten-bay build.
+function workdaySet(calendar) {
+  const wd = calendar && calendar.workdays;
+  return Array.isArray(wd) && wd.length ? new Set(wd.map(Number)) : new Set([1, 2, 3, 4, 5]);
+}
+export function isWorkingDay(iso, calendar = {}) {
+  const holidays = new Set((calendar && calendar.holidays) || []);
+  return workdaySet(calendar).has(toDate(iso).getUTCDay()) && !holidays.has(iso);
+}
+
 /**
  * Add a number of *working* days to a start date, skipping weekends and holidays.
  * Day 0 is the start date itself (if it's a working day). Returns the ISO date
  * that is `workDays` working days after (and including) the start.
  */
 export function addWorkdays(startIso, workDays, calendar = {}) {
-  const holidays = new Set(calendar.holidays || []);
-  const isWorking = (iso) => !isWeekend(iso) && !holidays.has(iso);
+  const isWorking = (iso) => isWorkingDay(iso, calendar);
 
   // Advance to the first working day on/after start.
   let cur = startIso;
@@ -96,7 +112,7 @@ export function countWorkdays(startIso, endIso, calendar = {}) {
   let count = 0;
   let cur = startIso;
   while (diffDays(cur, endIso) >= 0) {
-    if (!isWeekend(cur) && !holidays.has(cur)) count++;
+    if (isWorkingDay(cur, calendar)) count++;
     cur = addDays(cur, 1);
   }
   return count;
@@ -419,7 +435,7 @@ export function suggestStart(build, line, existingBuilds, stages, calendar = {},
     let ok = true;
     let cur = candidate;
     while (diffDays(cur, end) >= 0) {
-      if (!isWeekend(cur) && concurrentOn(cur) + 1 > line.capacity) { ok = false; break; }
+      if (isWorkingDay(cur, calendar) && concurrentOn(cur) + 1 > line.capacity) { ok = false; break; }
       cur = addDays(cur, 1);
     }
     if (ok) {

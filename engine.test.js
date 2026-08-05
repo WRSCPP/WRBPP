@@ -7,7 +7,7 @@ import {
   toISO, addDays, diffDays, isWeekend, addWorkdays, countWorkdays,
   buildDuration, effectiveStart, projectBuild, projectAll,
   detectLineOverbooking, analyzeCapacity,
-  forecastBuild, forecastPortfolio, suggestStart,
+  forecastBuild, forecastPortfolio, suggestStart, isWorkingDay,
 } from './engine.js';
 
 let passed = 0, failed = 0;
@@ -204,6 +204,37 @@ eq(forecastBuild(mkBuild({ confirmedStart: '2026-02-02' }), stages).risk, 'no-ta
 }
 
 // ----------------------------- report -----------------------------
+
+// ----------------------------------------------------------------- 4-day week
+// The shop runs Mon-Thu. addWorkdays used to skip only weekends, so a 4-day line's
+// dates were computed as if Friday were worked and every forecast landed early.
+{
+  const monFri = { holidays: [] };
+  const monThu = { holidays: [], workdays: [1, 2, 3, 4] };
+
+  ok(isWorkingDay('2026-02-13', monFri) === true, 'default calendar still treats Friday as a workday');
+  ok(isWorkingDay('2026-02-13', monThu) === false, 'a Mon-Thu calendar does not');
+  ok(isWorkingDay('2026-02-14', monFri) === false && isWorkingDay('2026-02-14', monThu) === false,
+    'weekends are non-working either way');
+  ok(isWorkingDay('2026-02-16', { holidays: ['2026-02-16'], workdays: [1, 2, 3, 4] }) === false,
+    'holidays still win over the workday set');
+  ok(isWorkingDay('2026-02-13', { workdays: [] }) === true, 'an empty workdays array falls back to Mon-Fri');
+
+  // Ground truth from the shop's own Build Schedule sheet: Day One Wednesday
+  // 2026-02-11, four production days (We, Th, Mo, Tu), Move Day Tuesday 2026-02-17.
+  eq(addWorkdays('2026-02-11', 3, monThu), '2026-02-17', "4-day inclusive cycle lands on the sheet's move day");
+  eq(addWorkdays('2026-02-11', 3, monFri), '2026-02-16', 'the old 5-day calendar landed a day early');
+
+  eq(addWorkdays('2026-02-12', 1, monThu), '2026-02-16', 'Friday is skipped when advancing');
+  // countWorkdays is inclusive of both endpoints: Wed 11 through Wed 18.
+  eq(countWorkdays('2026-02-11', '2026-02-18', monThu), 5, 'countWorkdays honours a 4-day week');
+  eq(countWorkdays('2026-02-11', '2026-02-18', monFri), 6, 'countWorkdays unchanged by default');
+
+  // A ten-bay build at one 4-day pulse per bay: 40 working days.
+  eq(addWorkdays('2026-02-11', 39, monThu), '2026-04-21', 'ten-bay run on a 4-day week');
+  eq(addWorkdays('2026-02-11', 39, monFri), '2026-04-07', 'ten-bay run on a 5-day week is two weeks earlier');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (fails.length) { console.log('\n' + fails.join('\n\n')); process.exit(1); }
 else { console.log('All engine tests passed ✓'); }
