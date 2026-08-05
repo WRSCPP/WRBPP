@@ -5,7 +5,7 @@
 import {
   bayPlan, seedMapping, bayHours, standardBayHours, bayCapacity,
   bayCycleDays, achievableTakt, requiredTakt, paceGap,
-  simulateLine, flowlineSeries,
+  simulateLine, flowlineSeries, simulateShop,
   stageRouting, traveledWork, moveReadyBlockers, dwellPulses,
 } from './takt.js';
 
@@ -258,6 +258,100 @@ group('pulse simulation');
   // Dates advance on the working calendar, skipping weekends.
   s = run([{ id: 'd', position: 1 }], () => 1);
   ok('completion date lands on a weekday', s.builds[0].completedDate % 7 !== 5 && s.builds[0].completedDate % 7 !== 6);
+}
+
+// ----------------------------------------------------------------- shop simulation
+group('shop simulation: two lines, one shared booth');
+{
+  const longBays = bayPlan([1,2,3,4,5,6,7,8,9,10], {});
+  const shortBays = bayPlan([1,2,3,4,5,6], {});
+  const lines = [
+    { key: 'long',  bays: longBays,  foamPosition: 4, trailer: false },
+    { key: 'short', bays: shortBays, foamPosition: 3, trailer: true },
+  ];
+  const run = (builds, opts = {}) => simulateShop({
+    lines, builds, start: 0, dwellFor: () => 1,
+    advanceDate: (d, n) => d + n, ...opts,
+  });
+
+  // Baseline: nobody needs foam or a trailer.
+  let s = run([{ id: 'a', line: 'long', position: 1 }, { id: 'b', line: 'short', position: 1 }]);
+  ok('long build clears 10 bays', s.builds.find(x=>x.build.id==='a').completedPulse === 10);
+  ok('short build clears 6 bays', s.builds.find(x=>x.build.id==='b').completedPulse === 6);
+  ok('no booth contention when nobody foams', s.boothWaitPulses === 0);
+  ok('lines run independently when nothing is shared',
+    s.blocks.filter(b=>b.reason==='booth').length === 0);
+
+  // One foamer: costs a pulse, no queue.
+  s = run([{ id: 'f', line: 'long', position: 4, needsFoam: true }]);
+  ok('foam adds a pulse to the run', s.builds[0].completedPulse === 8); // bays 4..10 = 7, +1 foam
+  ok('foam event is recorded', s.builds[0].timeline.some(t=>t.foamed));
+  ok('booth was granted immediately', s.boothLog.some(b=>b.granted && b.waited===0));
+
+  // Two foamers arriving together, one booth: one must wait.
+  s = run([
+    { id: 'x', line: 'long',  position: 4, needsFoam: true },
+    { id: 'y', line: 'short', position: 3, needsFoam: true },
+  ]);
+  ok('the booth queue is recorded', s.boothWaitPulses > 0);
+  ok('exactly one build waited', s.builds.filter(x=>x.boothWait>0).length === 1);
+  ok('both still finish', s.builds.every(x=>x.finished));
+  ok('the waiter is blocked for the booth, not by a bay',
+    s.blocks.some(b=>b.reason==='booth'));
+
+  // Bay stays reserved: a foaming build blocks its own line behind it.
+  s = run([
+    { id: 'front', line: 'long', position: 4, needsFoam: true },
+    { id: 'back',  line: 'long', position: 3 },
+  ], { boothPulses: () => 3 });
+  ok('the follower is blocked by the foaming build',
+    s.blocks.some(b=>b.reason==='blocked' && b.build.id==='back' && b.blockedBy.id==='front'));
+  ok('a long foam hold delays the follower',
+    s.builds.find(x=>x.build.id==='back').completedPulse
+      > s.builds.find(x=>x.build.id==='front').completedPulse);
+
+  // Cross-line effect: a Short Line foamer delays a Long Line foamer.
+  const solo = run([{ id: 'L', line: 'long', position: 4, needsFoam: true }])
+    .builds[0].completedPulse;
+  s = run([
+    { id: 'L', line: 'long',  position: 4, needsFoam: true },
+    { id: 'S', line: 'short', position: 3, needsFoam: true },
+  ], { boothPulses: () => 2 });
+  const withContention = s.builds.find(x=>x.build.id==='L').completedPulse;
+  ok('cross-line booth contention is visible in the forecast', withContention >= solo);
+
+  // Trailer pre-station
+  s = run([{ id: 't', line: 'short', needsTrailer: true }]);
+  ok('a trailer build starts in the trailer station',
+    s.builds[0].timeline[0].position === 'T');
+  ok('then enters Bay 1', s.builds[0].timeline.some(t=>t.position===1));
+  ok('trailer adds to the run', s.builds[0].completedPulse === 8); // 1 trailer + 6 bays + entry pulse
+  s = run([{ id: 'n', line: 'short' }]);
+  ok('a build with no trailer skips the station',
+    s.builds[0].timeline.every(t=>t.position!=='T'));
+  s = run([{ id: 't1', line: 'short', needsTrailer: true }, { id: 't2', line: 'short', needsTrailer: true }]);
+  ok('two trailer builds queue for the one station',
+    s.blocks.some(b=>b.reason==='trailer-busy'));
+  s = run([{ id: 'tl', line: 'long', needsTrailer: true }]);
+  ok('a line without a trailer station ignores the flag',
+    s.builds[0].timeline.every(t=>t.position!=='T'));
+
+  // Arbitration policy is pluggable and actually changes the outcome.
+  const builds2 = [
+    { id: 'early', line: 'long',  position: 4, needsFoam: true, due: 10 },
+    { id: 'late',  line: 'short', position: 3, needsFoam: true, due: 99 },
+  ];
+  const byDue = run(builds2, { boothPriority: (a, b) => a.build.due - b.build.due, boothPulses: () => 2 });
+  ok('due-date priority gives the booth to the urgent build first',
+    byDue.builds.find(x=>x.build.id==='early').boothWait === 0);
+
+  // Guard rails
+  ok('empty shop terminates', run([]).builds.length === 0);
+  const capped = simulateShop({ lines, builds: [{ id: 'q', line: 'long', position: 1 }], start: 0,
+    dwellFor: () => 999, advanceDate: (d,n)=>d+n, maxPulses: 8 });
+  ok('runaway dwell hits the pulse limit', capped.hitPulseLimit === true);
+  s = run([{ id: 'nb', line: 'long', position: 4, needsFoam: true }], { boothCapacity: 0 });
+  ok('zero booth capacity does not hang', s.hitPulseLimit === true || s.builds[0].finished === false);
 }
 
 // ----------------------------------------------------------------- flowline

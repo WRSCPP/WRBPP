@@ -424,3 +424,222 @@ export function flowlineSeries(sim) {
     points: b.timeline.map((t) => ({ date: t.date, position: t.position, bay: t.bay, exited: !!t.exited })),
   }));
 }
+
+// ----------------------------- Shop simulation -----------------------------
+/**
+ * simulateShop — walks BOTH lines together and arbitrates the shared spray-foam
+ * booth. This replaces simulateLine for any real forecast; simulateLine remains
+ * for the single-line case and for the tests that cover it.
+ *
+ * Why a separate function rather than running simulateLine twice: the booth is one
+ * resource with capacity 1 that both lines compete for, so the lines are not
+ * independent. Run them separately and the booth's queue is invisible — you can
+ * balance every bay on both lines perfectly and still be capped by the booth.
+ *
+ * ---------------------------------------------------------------------------
+ * ROUTE
+ *
+ *   [Trailer]  ->  Bay 1  ->  ...  ->  Bay N
+ *
+ * Trailer is an optional PRE-station with its own capacity: the trailer is the
+ * foundation for builds that sit on one, so it comes before Bay 1, not at the end.
+ * Only lines that declare `trailer: true` have one.
+ *
+ * Spray foam is NOT a station in the sequence. It happens while a build is in a
+ * designated bay (`foamPosition`), and the build KEEPS ITS BAY while using the
+ * booth. So a foaming build occupies two resources at once and blocks its own line
+ * behind it. Short Line builds cross to the Long Line's booth; there is only one
+ * booth in the shop, so both lines queue for the same thing.
+ *
+ * Both stops are per-build (`needsTrailer`, `needsFoam`) rather than per module
+ * type, because the decision is made case by case.
+ *
+ * ---------------------------------------------------------------------------
+ * BOOTH ARBITRATION
+ *
+ * When more builds want the booth than it can hold, the default order is
+ * longest-waiting first, then by id so runs are deterministic. Pass `boothPriority`
+ * to change it — nearest due date is the obvious alternative, and which policy you
+ * pick measurably changes who ships late, so it is a decision worth making
+ * explicitly rather than inheriting.
+ */
+export function simulateShop({
+  lines,
+  builds,
+  start,
+  dwellFor,
+  advanceDate,
+  boothCapacity = 1,
+  boothPulses = () => 1,
+  trailerPulses = () => 1,
+  boothPriority = null,
+  maxPulses = 500,
+}) {
+  const lineByKey = new Map(lines.map((l) => [l.key, l]));
+  const state = builds.map((b) => ({
+    build: b,
+    line: b.line,
+    // 0 = not yet on the line, 'T' = trailer pre-station, 1..N = bay position
+    pos: b.position === 'T' ? 'T' : (Number.isFinite(b.position) ? b.position : 0),
+    pulsesHere: Number.isFinite(b.pulsesInBay) ? b.pulsesInBay : 0,
+    foamDone: !b.needsFoam || !!b.foamDone,
+    foamPulses: 0,
+    holdsBooth: false,
+    boothWait: 0,
+    timeline: [],
+    done: false,
+  }));
+
+  // Occupancy is per line: "lineKey:position". Trailer stations are per line too.
+  const occupied = new Map();
+  const trailerBusy = new Map();
+  const keyOf = (line, pos) => `${line}:${pos}`;
+  for (const s of state) {
+    if (s.pos === 'T') trailerBusy.set(s.line, s);
+    else if (s.pos >= 1) occupied.set(keyOf(s.line, s.pos), s);
+  }
+
+  const blocks = [];
+  const boothLog = [];
+  let boothHeld = 0;
+  let date = start;
+  let pulse = 0;
+
+  for (const s of state) {
+    const line = lineByKey.get(s.line);
+    if (s.pos >= 1 && line) {
+      s.timeline.push({ pulse: 0, date, position: s.pos, bay: line.bays[s.pos - 1].id, entered: true });
+    } else if (s.pos === 'T') {
+      s.timeline.push({ pulse: 0, date, position: 'T', bay: 'trailer', entered: true });
+    }
+  }
+
+  const needFor = (s) => {
+    const line = lineByKey.get(s.line);
+    if (s.pos === 'T') return Math.max(1, Math.ceil(trailerPulses(s.build) || 1));
+    return Math.max(1, Math.ceil(dwellFor(s.build, line.bays[s.pos - 1]) || 1));
+  };
+  const wantsBooth = (s) => {
+    const line = lineByKey.get(s.line);
+    return !s.done && typeof s.pos === 'number' && s.pos >= 1
+      && line && line.foamPosition === s.pos
+      && s.build.needsFoam && !s.foamDone && !s.holdsBooth
+      && s.pulsesHere >= needFor(s);
+  };
+
+  while (pulse < maxPulses && state.some((s) => !s.done)) {
+    pulse += 1;
+    date = advanceDate(date, 1);
+
+    // A. Age everything already in a station.
+    for (const s of state) if (!s.done && (s.pos === 'T' || s.pos >= 1)) s.pulsesHere += 1;
+
+    // B. Arbitrate the booth before anyone moves, so the grant is fair rather
+    //    than an accident of which line happens to be iterated first.
+    const requesters = state.filter(wantsBooth);
+    const order = boothPriority || ((a, b) => (b.boothWait - a.boothWait)
+      || String(a.build.id).localeCompare(String(b.build.id)));
+    requesters.sort(order);
+    for (const r of requesters) {
+      if (boothHeld < boothCapacity) {
+        r.holdsBooth = true; r.foamPulses = 0; boothHeld += 1;
+        boothLog.push({ pulse, date, build: r.build, granted: true, waited: r.boothWait });
+      } else {
+        r.boothWait += 1;
+        boothLog.push({ pulse, date, build: r.build, granted: false, waited: r.boothWait });
+        blocks.push({ pulse, date, build: r.build, reason: 'booth', bay: lineByKey.get(r.line).bays[r.pos - 1].id });
+      }
+    }
+
+    // C. Move, front-first within each line so a bay is vacated before the build
+    //    behind it tries to enter.
+    for (const line of lines) {
+      const mine = state.filter((s) => s.line === line.key && !s.done).sort((a, b) => {
+        const pa = a.pos === 'T' ? -0.5 : a.pos, pb = b.pos === 'T' ? -0.5 : b.pos;
+        return pb - pa;
+      });
+
+      for (const s of mine) {
+        // Not started: trailer first if this build needs one, else Bay 1.
+        if (s.pos === 0) {
+          if (s.build.needsTrailer && line.trailer) {
+            if (trailerBusy.get(line.key)) {
+              blocks.push({ pulse, date, build: s.build, reason: 'trailer-busy', blockedBy: trailerBusy.get(line.key).build });
+              continue;
+            }
+            s.pos = 'T'; s.pulsesHere = 0; trailerBusy.set(line.key, s);
+            s.timeline.push({ pulse, date, position: 'T', bay: 'trailer', entered: true });
+            continue;
+          }
+          if (occupied.has(keyOf(line.key, 1))) {
+            blocks.push({ pulse, date, build: s.build, reason: 'entry', bay: line.bays[0].id, blockedBy: occupied.get(keyOf(line.key, 1)).build });
+            continue;
+          }
+          s.pos = 1; s.pulsesHere = 0; occupied.set(keyOf(line.key, 1), s);
+          s.timeline.push({ pulse, date, position: 1, bay: line.bays[0].id, entered: true });
+          continue;
+        }
+
+        // In the trailer station: move to Bay 1 when the trailer work is done.
+        if (s.pos === 'T') {
+          if (s.pulsesHere < needFor(s)) continue;
+          if (occupied.has(keyOf(line.key, 1))) {
+            blocks.push({ pulse, date, build: s.build, reason: 'entry', bay: line.bays[0].id, blockedBy: occupied.get(keyOf(line.key, 1)).build });
+            continue;
+          }
+          trailerBusy.delete(line.key);
+          s.pos = 1; s.pulsesHere = 0; occupied.set(keyOf(line.key, 1), s);
+          s.timeline.push({ pulse, date, position: 1, bay: line.bays[0].id, entered: true });
+          continue;
+        }
+
+        const bay = line.bays[s.pos - 1];
+        if (s.pulsesHere < needFor(s)) continue; // still working this bay
+
+        // Foam happens here, and the bay stays reserved throughout.
+        if (line.foamPosition === s.pos && s.build.needsFoam && !s.foamDone) {
+          if (s.holdsBooth) {
+            s.foamPulses += 1;
+            if (s.foamPulses >= Math.max(1, Math.ceil(boothPulses(s.build) || 1))) {
+              s.holdsBooth = false; boothHeld -= 1; s.foamDone = true;
+              s.timeline.push({ pulse, date, position: s.pos, bay: bay.id, foamed: true });
+            }
+          }
+          continue; // waiting for, or using, the booth — either way it holds its bay
+        }
+
+        if (s.pos >= line.bays.length) {
+          occupied.delete(keyOf(line.key, s.pos));
+          s.done = true; s.completedPulse = pulse; s.completedDate = date;
+          s.timeline.push({ pulse, date, position: s.pos, bay: bay.id, exited: true });
+          continue;
+        }
+        const next = s.pos + 1;
+        if (occupied.has(keyOf(line.key, next))) {
+          blocks.push({ pulse, date, build: s.build, reason: 'blocked', bay: line.bays[next - 1].id, blockedBy: occupied.get(keyOf(line.key, next)).build });
+          continue;
+        }
+        occupied.delete(keyOf(line.key, s.pos));
+        s.pos = next; s.pulsesHere = 0;
+        occupied.set(keyOf(line.key, next), s);
+        s.timeline.push({ pulse, date, position: next, bay: line.bays[next - 1].id, entered: true });
+      }
+    }
+  }
+
+  const boothWaitTotal = boothLog.filter((b) => !b.granted).length;
+  return {
+    pulses: pulse,
+    hitPulseLimit: pulse >= maxPulses && state.some((s) => !s.done),
+    builds: state.map((s) => ({
+      build: s.build, line: s.line, timeline: s.timeline,
+      completedPulse: s.completedPulse ?? null,
+      completedDate: s.completedDate ?? null,
+      finished: s.done, boothWait: s.boothWait,
+    })),
+    blocks,
+    boothLog,
+    // Headline diagnostic: pulses lost to the booth queue across the whole shop.
+    boothWaitPulses: boothWaitTotal,
+  };
+}
