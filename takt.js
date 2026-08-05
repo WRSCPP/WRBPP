@@ -140,6 +140,88 @@ export function bayCapacity(bay, crew, stagesForRole) {
   return hours;
 }
 
+// ----------------------------- Traveled work -----------------------------
+/**
+ * A stage has a PLANNED bay, but the floor can execute it in a different bay when
+ * running ahead or behind. Work that should have been done upstream and moves
+ * downstream with the build is called "traveled work" — the term aerospace and
+ * shipbuilding use. Boeing rebuilt its 737 line process around managing it,
+ * introducing "move-ready criteria": a set of jobs that must be complete at each
+ * of the 10 stations before a unit is cleared to advance.
+ *
+ * That is the model here, and it is deliberately not a hard constraint:
+ *
+ *   planned bay   where a stage is meant to happen (used for forecasting)
+ *   moveReady     if true, the build should not leave its planned bay until this
+ *                 stage is done; if false, the stage is allowed to travel
+ *
+ * Why this matters for forecasting: a build sitting in Bay 8 with Bay 6 work
+ * outstanding does NOT have only bays 8-10 of work left. It carries a backlog,
+ * and that backlog consumes the same crew capacity as the current bay's own work.
+ * Ignoring it makes every downstream forecast optimistic, which is the direction
+ * that gets promises broken.
+ */
+
+/** Flat stage -> {bay, moveReady} lookup built from a line's bay mapping. */
+export function stageRouting(bays, moveReadyStages = []) {
+  const ready = new Set(moveReadyStages.map(String));
+  const out = new Map();
+  for (const bay of bays) {
+    for (const stageId of bay.stages) {
+      out.set(String(stageId), { bay: bay.id, position: bay.position, moveReady: ready.has(String(stageId)) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Work a build is carrying: stages whose planned bay is at or behind its current
+ * position but which are not complete. `isComplete(build, stageId)` and
+ * `hoursOf(build, stageId)` are supplied so this stays free of data-shape
+ * assumptions.
+ */
+export function traveledWork(build, position, routing, hoursOf, isComplete) {
+  const stages = [];
+  let hours = 0;
+  for (const [stageId, r] of routing) {
+    if (r.position > position) continue;      // not due yet
+    if (isComplete(build, stageId)) continue; // already done
+    const h = Number(hoursOf(build, stageId)) || 0;
+    stages.push({ stageId, plannedBay: r.bay, plannedPosition: r.position, hours: h, moveReady: r.moveReady });
+    hours += h;
+  }
+  // Oldest debt first: the furthest upstream is the most overdue.
+  stages.sort((a, b) => a.plannedPosition - b.plannedPosition);
+  return { hours, stages, count: stages.length };
+}
+
+/**
+ * Move-ready check: which stages planned for this bay are flagged critical and
+ * still incomplete. Empty array means the build is cleared to advance.
+ */
+export function moveReadyBlockers(build, bay, routing, isComplete) {
+  return bay.stages
+    .map(String)
+    .filter((stageId) => routing.get(stageId)?.moveReady && !isComplete(build, stageId));
+}
+
+/**
+ * Pulses a build needs in a bay, given the work it must absorb there.
+ *
+ * `hours` should include any traveled backlog, because that work competes for the
+ * same crew. Always at least one pulse — a bay a build passes through still
+ * occupies it for a pulse.
+ */
+export function dwellPulses(hours, weeklyCapacity, pulseDays, workdaysPerWeek = 5) {
+  const h = Number(hours) || 0;
+  if (h <= 0) return 1;
+  const cap = Number(weeklyCapacity) || 0;
+  if (cap <= 0) return Infinity;
+  const capacityPerPulse = cap * (pulseDays / workdaysPerWeek);
+  if (capacityPerPulse <= 0) return Infinity;
+  return Math.max(1, Math.ceil(h / capacityPerPulse));
+}
+
 // ----------------------------- Takt -----------------------------
 
 /**

@@ -6,6 +6,7 @@ import {
   bayPlan, seedMapping, bayHours, standardBayHours, bayCapacity,
   bayCycleDays, achievableTakt, requiredTakt, paceGap,
   simulateLine, flowlineSeries,
+  stageRouting, traveledWork, moveReadyBlockers, dwellPulses,
 } from './takt.js';
 
 let passed = 0, failed = 0;
@@ -133,6 +134,68 @@ group('required takt and the gap');
 
   ok('no days left is impossible', paceGap(requiredTakt(3, 5, 5, workdaysBetween), fast).status === 'impossible');
   ok('finished build reports done', paceGap(requiredTakt(0, 0, 10, workdaysBetween), fast).status === 'done');
+}
+
+// ----------------------------------------------------------------- traveled work
+group('traveled work and move-ready criteria');
+{
+  // 4 bays; framing+sheathing in bay 1, rough-in in bay 2, finish in bay 3, QC in bay 4.
+  const bays = bayPlan([1, 2, 3, 4], { 1: ['fr', 'sh'], 2: ['ri'], 3: ['fi'], 4: ['qc'] });
+  const routing = stageRouting(bays, ['fr', 'qc']);   // framing and QC gate the move
+
+  ok('routing maps every mapped stage', routing.size === 5);
+  ok('stage knows its planned bay', routing.get('ri').bay === 2);
+  ok('stage knows its planned position', routing.get('fi').position === 3);
+  ok('move-ready flag is set where listed', routing.get('fr').moveReady === true);
+  ok('non-critical stage is travelable', routing.get('sh').moveReady === false);
+  ok('unmapped stage is absent', routing.get('nope') === undefined);
+
+  const hours = { fr: 80, sh: 40, ri: 60, fi: 120, qc: 20 };
+  const hoursOf = (b, s2) => hours[s2] || 0;
+  const doneSet = (arr) => (b, s2) => arr.includes(s2);
+
+  // Build in bay 3 with sheathing (bay 1) and rough-in (bay 2) still open.
+  let tw = traveledWork({}, 3, routing, hoursOf, doneSet(['fr', 'fi']));
+  ok('carries the two overdue stages', tw.count === 2);
+  ok('carried hours sum correctly', tw.hours === 40 + 60);
+  ok('oldest debt listed first', tw.stages[0].stageId === 'sh');
+  ok('carried stage reports its planned bay', tw.stages[0].plannedBay === 1);
+  ok('work not yet due is excluded', !tw.stages.some((x) => x.stageId === 'qc'));
+
+  tw = traveledWork({}, 3, routing, hoursOf, doneSet(['fr', 'sh', 'ri', 'fi']));
+  ok('fully caught up carries nothing', tw.count === 0 && tw.hours === 0);
+
+  tw = traveledWork({}, 1, routing, hoursOf, doneSet([]));
+  ok('at bay 1 only bay 1 work is due', tw.count === 2 && tw.hours === 120);
+
+  // Move-ready gating
+  ok('incomplete critical stage blocks the move',
+    moveReadyBlockers({}, bays[0], routing, doneSet(['sh'])).join() === 'fr');
+  ok('completing the critical stage clears the move',
+    moveReadyBlockers({}, bays[0], routing, doneSet(['fr'])).length === 0);
+  ok('travelable stage never blocks',
+    moveReadyBlockers({}, bays[0], routing, doneSet(['fr'])).includes('sh') === false);
+  ok('bay with no critical stages is always clear',
+    moveReadyBlockers({}, bays[1], routing, doneSet([])).length === 0);
+}
+
+// ----------------------------------------------------------------- dwell
+group('dwell from work content');
+{
+  // 160h at 80h/wk, weekly pulse (5 workdays) -> 80h per pulse -> 2 pulses.
+  ok('dwell rounds up to whole pulses', dwellPulses(160, 80, 5, 5) === 2);
+  ok('work inside one pulse is one pulse', dwellPulses(70, 80, 5, 5) === 1);
+  ok('no work still occupies one pulse', dwellPulses(0, 80, 5, 5) === 1);
+  ok('no capacity is infeasible', dwellPulses(10, 0, 5, 5) === Infinity);
+
+  // The counterintuitive one: halving the pulse interval halves capacity per
+  // pulse, so dwell in PULSES doubles and elapsed time does not improve.
+  const weekly = dwellPulses(160, 80, 5, 5);
+  const twiceWeekly = dwellPulses(160, 80, 2.5, 5);
+  ok('shorter pulse needs more pulses', twiceWeekly === weekly * 2);
+  ok('elapsed days are unchanged without more capacity',
+    near(weekly * 5, twiceWeekly * 2.5));
+  ok('adding capacity is what actually speeds it up', dwellPulses(160, 160, 2.5, 5) === 2);
 }
 
 // ----------------------------------------------------------------- pulse simulation
