@@ -13,6 +13,10 @@ import {
   projectAll, projectBuild, analyzeCapacity, forecastPortfolio, forecastBuild,
   suggestStart, buildDuration, effectiveStart, toISO, addWorkdays,
 } from './engine.js';
+import {
+  bayPlan, seedMapping, standardBayHours, bayHours, bayCapacity,
+  achievableTakt, stageRouting,
+} from './takt.js';
 import { buildReport } from './analytics.js';
 import { SEED_BUILDS, SEED_LINES, SEED_STAGES, SEED_SETTINGS } from './seed.js';
 
@@ -117,6 +121,7 @@ const state = {
   scenario: null, // { buildId, date } for the What-If tool
   openBuildId: null,
   modalTab: 'details',
+  routingLine: 'long', // which line the Line Routing card is showing
   // `today` is defined as a live getter immediately below — see localToday().
 };
 
@@ -860,6 +865,22 @@ function resolveShopLine(def, usedIds) {
 // bay and any one-off bays (Trailer) the line owns. Folding the extras in here
 // rather than rendering them separately means lane allocation sees every cell, so
 // a shared bay divides consistently across the whole row.
+// Which stages each person has actually worked, aggregated from every build's
+// stageCrew assignment. Used to infer bay capacity without inventing a setting.
+function crewStageCoverage() {
+  const cover = new Map();
+  for (const b of state.builds) {
+    for (const [stageId, ids] of Object.entries(b.stageCrew || {})) {
+      for (const personId of ids || []) {
+        if (!personId) continue;
+        if (!cover.has(personId)) cover.set(personId, new Set());
+        cover.get(personId).add(String(stageId));
+      }
+    }
+  }
+  return cover;
+}
+
 function shopCells(def) {
   const region = def.region;
   const bayWidth = UNIFORM_BAY_WIDTH;
@@ -2014,7 +2035,11 @@ function renderSettings() {
   const crewFilter = state.crewRoleFilter || 'all';
   const shownPeople = crewFilter === 'all' ? people : people.filter((p) => (p.role || '') === crewFilter);
   // Build a role <select> for a person (or the add form when id is null).
-  const roleSelect = (selected, id) => `<select class="ce-role" ${id ? `data-crew-field="role" data-crew-id="${id}"` : 'class="ce-role ac-role"'} title="Role">
+  // title carries the CURRENT role, not the generic word "Role". The card is ~290px
+  // wide, which leaves the select roughly 86px of text room — enough for most roles
+  // but not for the longest ("Rough-in Mechanical" needs ~166px), so the full value
+  // has to be reachable on hover.
+  const roleSelect = (selected, id) => `<select class="ce-role" ${id ? `data-crew-field="role" data-crew-id="${id}"` : 'class="ce-role ac-role"'} title="${esc(selected || 'No role')}">
       <option value=""${!selected ? ' selected' : ''}>— No role —</option>
       ${roles.map((r) => `<option value="${esc(r)}"${selected === r ? ' selected' : ''}>${esc(r)}</option>`).join('')}
       ${selected && !roles.includes(selected) ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : ''}
@@ -2061,6 +2086,126 @@ function renderSettings() {
       <button class="rm" data-del-stage="${s.id}">✕</button></div>`).join('')}
     </div><form class="add-row" data-add-stage><input placeholder="New stage…" required><button class="btn sm primary">Add</button></form></div>`;
 
+  // ----------------------------- Line Routing card -----------------------------
+  // Which production stages happen in which bay, per line, plus which of those
+  // gate the move. Everything the takt model needs to forecast comes from here.
+  //
+  // NOTE: this covers the numbered bays only (Long 1-10, Short 1-6), which is the
+  // sequence a build actually walks. Spray Foam and Trailer are configured as
+  // separate lines with capacity 1 in Production Lines, so whether a build leaves
+  // the line for them or passes through them in sequence is an open question —
+  // they are deliberately left out rather than guessed at.
+  const routingCard = (() => {
+    const def = SHOP_LINES.find((d) => d.key === state.routingLine) || SHOP_LINES[0];
+    const bayIds = Array.from({ length: def.bays }, (_, i) => i + 1);
+    const routingAll = state.settings.lineRouting || {};
+    const mapping = routingAll[def.key] || {};
+    const moveReady = new Set((state.settings.moveReadyStages || []).map(String));
+    const bays = bayPlan(bayIds, mapping);
+
+    // Where each stage currently sits, so the select can show it.
+    const bayOfStage = new Map();
+    for (const bay of bays) for (const sid of bay.stages) bayOfStage.set(String(sid), bay.id);
+
+    // Standard hours per bay, averaged from completed builds. This is the routing
+    // an ERP would hold, derived from history rather than typed in.
+    const refBuilds = state.builds.filter((b) => b.status === 'complete');
+    const hoursOf = (b, sid) => Number(b.stageHours?.[sid]) || 0;
+    const std = standardBayHours(bays, refBuilds, hoursOf);
+
+    // Capacity per bay. There is no explicit "which bays can this role work"
+    // setting yet, so it is INFERRED two ways, in order of trustworthiness:
+    //
+    //   1. History — every stage a person has actually been assigned to via
+    //      build.stageCrew, aggregated across all builds. Real signal.
+    //   2. Name match — role name against stage label, which works because the
+    //      roles are named after the work ("Framing" role, "Framing" stage).
+    //      A guess, and flagged as such in the card.
+    //
+    // Explicit per-bay staffing is the right input and is the obvious next card;
+    // until then these figures are indicative, not authoritative.
+    const crew = state.settings.people || [];
+    const coverage = crewStageCoverage();
+    const stageLabel = new Map(state.stages.map((st) => [String(st.id), (st.label || '').toLowerCase()]));
+    const capOf = (bay) => {
+      const stages = new Set(bay.stages.map(String));
+      let hours = 0;
+      for (const p of crew) {
+        const seen = coverage.get(p.id);
+        const byHistory = seen && [...seen].some((sid) => stages.has(sid));
+        const role = (p.role || '').toLowerCase().trim();
+        const byName = role && bay.stages.some((sid) => {
+          const label = stageLabel.get(String(sid)) || '';
+          return label.includes(role) || role.includes(label);
+        });
+        if (byHistory || byName) hours += Number(p.weeklyHours) || 0;
+      }
+      return hours;
+    };
+    const inferredFromNamesOnly = crew.length > 0 && coverage.size === 0;
+    const takt = achievableTakt(bays, (bay) => std[bay.id] || 0, capOf, def.workdaysPerWeek || 5);
+    const peak = Math.max(1, ...bays.map((bay) => std[bay.id] || 0));
+
+    const unassigned = state.stages.filter((st) => !bayOfStage.has(String(st.id)));
+
+    const stageRows = state.stages.map((st) => {
+      const cur = bayOfStage.get(String(st.id));
+      return `<tr class="${cur === undefined ? 'lr-unassigned' : ''}">
+        <td class="lr-stage">${esc(st.label)}</td>
+        <td><select class="lr-bay" data-routing-stage="${esc(st.id)}" title="Planned bay for ${esc(st.label)}">
+          <option value=""${cur === undefined ? ' selected' : ''}>— none —</option>
+          ${bayIds.map((n) => `<option value="${n}"${String(cur) === String(n) ? ' selected' : ''}>Bay ${n}</option>`).join('')}
+        </select></td>
+        <td class="lr-mr"><label title="Must be complete before the build leaves its planned bay. Unchecked stages are allowed to travel downstream.">
+          <input type="checkbox" data-moveready-stage="${esc(st.id)}"${moveReady.has(String(st.id)) ? ' checked' : ''}></label></td>
+      </tr>`;
+    }).join('');
+
+    const loadRows = bays.map((bay) => {
+      const h = std[bay.id] || 0;
+      const cap = capOf(bay);
+      const row = takt.rows.find((r) => r.bay.id === bay.id);
+      const isNeck = takt.bottleneck && takt.bottleneck.bay.id === bay.id && h > 0;
+      const starved = h > 0 && cap <= 0;
+      return `<div class="lr-load-row${isNeck ? ' neck' : ''}${starved ? ' starved' : ''}">
+        <span class="lr-load-bay">Bay ${bay.position}</span>
+        <span class="lr-load-track"><span class="lr-load-fill" style="width:${peak ? (h / peak) * 100 : 0}%"></span></span>
+        <span class="lr-load-num">${h ? Math.round(h) + ' h' : '—'}</span>
+        <span class="lr-load-cap">${cap ? Math.round(cap) + ' h/wk' : starved ? 'no crew' : '—'}</span>
+        <span class="lr-load-days">${row && Number.isFinite(row.cycleDays) && row.cycleDays > 0 ? row.cycleDays.toFixed(1) + ' d' : ''}</span>
+      </div>`;
+    }).join('');
+
+    const neck = takt.bottleneck;
+    const summary = refBuilds.length
+      ? `<div class="lr-summary">
+          <span><strong>${Number.isFinite(takt.pulseDays) ? takt.pulseDays.toFixed(1) : '—'}</strong> workdays per bay achievable${neck && Number.isFinite(takt.pulseDays) ? ` · set by <strong>Bay ${neck.bay.position}</strong>` : ''}</span>
+          <span><strong>${(takt.lineEfficiency * 100).toFixed(0)}%</strong> line balance${takt.lineEfficiency < 0.8 ? ' — moving work off the slowest bay would raise this' : ''}</span>
+          ${takt.starvedBays.length ? `<span class="lr-warn">Bays ${takt.starvedBays.join(', ')} have hours but no crew matched to them — capacity there reads zero, so no achievable pace can be computed.</span>` : ''}
+          <span class="lr-note">Crew capacity is inferred${inferredFromNamesOnly ? ' from role names only' : ' from past stage assignments and role names'}. Treat it as indicative until per-bay staffing is set explicitly.</span>
+        </div>`
+      : `<div class="lr-summary"><span>Bay hours are averaged from completed builds. None yet, so the load figures will fill in as builds finish.</span></div>`;
+
+    return `<div class="settings-card lr-card"><h3>Line Routing <span class="count-pill">${state.stages.length - unassigned.length}/${state.stages.length}</span></h3>
+      <p class="card-hint">Which stages happen in which bay, and which must be finished before a build moves on. Builds start at Bay 1 and advance to Bay ${def.bays}. Stages left unchecked may travel downstream when you are ahead or behind — the forecast counts that carried work.</p>
+      <div class="lr-tabs">
+        ${SHOP_LINES.map((d) => `<button class="lr-tab${d.key === def.key ? ' active' : ''}" data-routing-line="${d.key}">${esc(d.label)} · ${d.bays} bays</button>`).join('')}
+        <button class="btn sm" data-routing-seed title="Distribute stages evenly as a starting point, then correct by hand">Distribute evenly</button>
+      </div>
+      ${unassigned.length ? `<div class="lr-warn">${unassigned.length} stage${unassigned.length === 1 ? '' : 's'} not yet assigned on this line — forecasts will under-count until they are.</div>` : ''}
+      <div class="lr-split">
+        <div class="lr-table-wrap"><table class="lr-table">
+          <thead><tr><th>Stage</th><th>Bay</th><th title="Gates the move">Gate</th></tr></thead>
+          <tbody>${stageRows}</tbody>
+        </table></div>
+        <div class="lr-load">
+          <div class="lr-load-head"><span>Bay</span><span>Load</span><span>Hours</span><span>Crew</span><span>Days</span></div>
+          ${loadRows}
+          ${summary}
+        </div>
+      </div></div>`;
+  })();
+
   const optCards = lists.map((cfg) => {
     const items = state.settings[cfg.key] || [];
     return `<div class="settings-card"><h3>${cfg.title}</h3>
@@ -2096,7 +2241,7 @@ function renderSettings() {
       <input type="file" id="importFile" accept="application/json" hidden>
       <span class="td-sub" id="storageNote"></span>
     </div>
-    <div class="settings-grid"><div id="adminPeopleRoot"></div>${exportCard}${lineCards}${peopleCard}${stageCard}${optCards}</div>`;
+    <div class="settings-grid"><div id="adminPeopleRoot"></div>${exportCard}${lineCards}${peopleCard}${stageCard}${optCards}${routingCard}</div>`;
   makeSettingsCollapsible();
   // Admins get the People & Access panel. The hook is only defined when main.js
   // loaded admin-ui.js, so this is a no-op for editors and viewers.
@@ -2974,6 +3119,26 @@ function wireGlobalEvents() {
     }
   });
   $('#settingsRoot').addEventListener('click', async (e) => {
+    // Line Routing: switch which line is being edited.
+    const routingTab = e.target.closest('[data-routing-line]');
+    if (routingTab) { state.routingLine = routingTab.dataset.routingLine; renderSettings(); return; }
+    // Line Routing: seed an even split as a starting point. Deliberately does NOT
+    // overwrite an existing mapping without asking — an even split is certainly
+    // wrong and losing a hand-built routing to a stray click would be costly.
+    if (e.target.closest('[data-routing-seed]')) {
+      const key = state.routingLine;
+      const def = SHOP_LINES.find((d) => d.key === key) || SHOP_LINES[0];
+      const existing = (state.settings.lineRouting || {})[key] || {};
+      const hasAny = Object.values(existing).some((arr) => (arr || []).length);
+      if (hasAny && !confirm(`Replace the existing ${def.label} routing with an even split?`)) return;
+      const bayIds = Array.from({ length: def.bays }, (_, i) => i + 1);
+      const mapping = seedMapping(bayIds, state.stages.map((st) => st.id));
+      const lineRouting = { ...(state.settings.lineRouting || {}), [key]: mapping };
+      state.settings = { ...state.settings, lineRouting };
+      await repo.saveSettings(state.settings);
+      renderSettings();
+      return;
+    }
     const delOpt = e.target.closest('[data-del-opt]'); const delLine = e.target.closest('[data-del-line]'); const delStage = e.target.closest('[data-del-stage]');
     if (delOpt) { const key = delOpt.dataset.delOpt; const val = delOpt.dataset.delVal; const simple = isSimpleList(key); const next = (state.settings[key] || []).filter((it) => (simple ? it : it.id) !== val); await repo.saveSettings({ ...state.settings, [key]: next }); }
     if (delLine) { if ((state.lines.length <= 1)) return alert('Keep at least one line.'); await repo.deleteLine(delLine.dataset.delLine); }
@@ -3011,6 +3176,39 @@ function wireGlobalEvents() {
     if (e.target.id === 'importBtn') $('#importFile').click();
   });
   $('#settingsRoot').addEventListener('change', async (e) => {
+    // Line Routing: assign a stage to a bay on the current line. The whole mapping
+    // is rebuilt from the selects rather than patched in place, so rapid changes
+    // cannot race each other into an inconsistent state.
+    if (e.target.matches('[data-routing-stage]')) {
+      const key = state.routingLine;
+      const mapping = {};
+      for (const sel of $$('#settingsRoot [data-routing-stage]')) {
+        const bay = sel.value;
+        if (!bay) continue;
+        (mapping[bay] ||= []).push(sel.dataset.routingStage);
+      }
+      // Keep each bay's stages in production-sequence order so the routing reads
+      // the same way the floor works.
+      const order = new Map(state.stages.map((st, i) => [String(st.id), i]));
+      for (const k of Object.keys(mapping)) {
+        mapping[k].sort((a, b) => (order.get(String(a)) ?? 0) - (order.get(String(b)) ?? 0));
+      }
+      const lineRouting = { ...(state.settings.lineRouting || {}), [key]: mapping };
+      state.settings = { ...state.settings, lineRouting };
+      await repo.saveSettings(state.settings);
+      renderSettings();
+      return;
+    }
+    // Line Routing: does this stage gate the move out of its planned bay?
+    if (e.target.matches('[data-moveready-stage]')) {
+      const id = String(e.target.dataset.movereadyStage);
+      const set = new Set((state.settings.moveReadyStages || []).map(String));
+      if (e.target.checked) set.add(id); else set.delete(id);
+      state.settings = { ...state.settings, moveReadyStages: [...set] };
+      await repo.saveSettings(state.settings);
+      renderSettings();
+      return;
+    }
     // Filter the crew list by role.
     if (e.target.matches('[data-crew-filter]')) { state.crewRoleFilter = e.target.value; renderSettings(); return; }
     // Edit a crew member's name / role / weekly hours.

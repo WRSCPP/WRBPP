@@ -348,6 +348,49 @@ html,body{max-width:100%;overflow-x:hidden}
    informational: same shape as .bay-warning but in neutral ink with no icon. */
 .bay-shared{margin:12px 0 0;padding:10px 13px;border:1px solid var(--line-strong);border-left:4px solid var(--timber);border-radius:var(--radius);background:var(--surface-2);font-size:12.5px;color:var(--text-muted);line-height:1.5}
 
+/* ---------------------------------------------------------------------------
+   Line Routing card. Spans the full settings grid because it is a matrix, not a
+   list: stage assignments on the left, resulting bay load on the right, so an
+   imbalance is visible while you are still mapping rather than after.
+   --------------------------------------------------------------------------- */
+.lr-card{grid-column:1/-1}
+.lr-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.lr-tab{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 11px;font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);cursor:pointer;font-weight:700}
+.lr-tab:hover{border-color:var(--timber)}
+.lr-tab.active{background:var(--timber);border-color:var(--timber);color:#fff}
+.lr-warn{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--amber);background:color-mix(in srgb,var(--amber) 8%,var(--card));font-size:11.5px;color:var(--text-muted);border-radius:var(--radius)}
+.lr-split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.2fr);gap:16px;align-items:start}
+@media (max-width:900px){.lr-split{grid-template-columns:1fr}}
+
+.lr-table-wrap{max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--radius)}
+.lr-table{width:100%;border-collapse:collapse;font-size:12px}
+.lr-table thead th{position:sticky;top:0;background:var(--paper-2);z-index:2;text-align:left;padding:7px 9px;font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);border-bottom:1px solid var(--line-strong)}
+.lr-table td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
+.lr-table tr:last-child td{border-bottom:none}
+.lr-table tr.lr-unassigned{background:color-mix(in srgb,var(--amber) 6%,transparent)}
+.lr-stage{font-weight:600;color:var(--ink)}
+.lr-bay{width:100%;min-width:0;background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:5px 24px 5px 7px;font-size:12px;font-family:var(--body)}
+.lr-bay:focus{border-color:var(--saw);outline:none}
+.lr-mr{text-align:center;width:44px}
+.lr-mr input{width:14px;height:14px;margin:0;cursor:pointer}
+
+.lr-load{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;background:var(--surface-2)}
+.lr-load-head,.lr-load-row{display:grid;grid-template-columns:52px 1fr 54px 66px 44px;gap:8px;align-items:center}
+.lr-load-head{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);padding-bottom:6px;border-bottom:1px solid var(--line)}
+.lr-load-row{padding:4px 0;font-size:11.5px}
+.lr-load-bay{font-weight:600;color:var(--text-muted)}
+.lr-load-track{height:9px;background:var(--card);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.lr-load-fill{display:block;height:100%;background:var(--pine)}
+.lr-load-row.neck .lr-load-fill{background:var(--clay)}
+.lr-load-row.neck .lr-load-bay{color:var(--clay)}
+.lr-load-row.starved .lr-load-cap{color:var(--clay);font-weight:700}
+.lr-load-num,.lr-load-days{font-family:var(--mono);font-size:10.5px;text-align:right;color:var(--text-muted)}
+.lr-load-cap{font-family:var(--mono);font-size:9.5px;color:var(--text-dim)}
+.lr-summary{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--text-muted)}
+.lr-summary strong{color:var(--ink)}
+.lr-note{font-size:10.5px;color:var(--text-dim);font-style:italic}
+.lr-summary .lr-warn{margin:4px 0 0}
+
 /* Multi-select bay picker in the build panel. */
 .bay-pick{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .bay-pick-opt{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);font-size:11.5px;cursor:pointer;user-select:none}
@@ -667,11 +710,12 @@ body.col-resizing *{cursor:col-resize!important}
 /* ---------- Crew (people) settings ---------- */
 .crew-edit-list{display:flex;flex-direction:column;gap:9px;margin-bottom:12px;max-height:230px;overflow-y:auto;overflow-x:hidden;padding-right:2px}
 .crew-filter{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim)}
-.crew-filter select{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 8px;font-size:12px;font-family:var(--body)}
+/* Room for the native arrow so a long role name can't run underneath it. */
+.crew-filter select{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 26px 6px 8px;font-size:12px;font-family:var(--body)}
 .crew-filter select:focus{border-color:var(--saw);outline:none}
-.crew-edit-row select.ce-role{background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:7px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
+.crew-edit-row select.ce-role{background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:7px 26px 7px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
 .crew-edit-row select.ce-role:focus{border-color:var(--saw);outline:none}
-.add-crew-row select.ac-role{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
+.add-crew-row select.ac-role{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px 26px 8px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
 .add-crew-row select.ac-role:focus{border-color:var(--saw);outline:none}
 .crew-edit-row{display:grid;grid-template-columns:1fr 68px 24px;grid-template-areas:"name name del" "role hrs hrs";gap:6px 7px;align-items:center;padding:8px 9px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius)}
 .crew-edit-row .ce-name{grid-area:name;font-weight:600}
@@ -682,7 +726,16 @@ body.col-resizing *{cursor:col-resize!important}
 .crew-edit-row input:focus{border-color:var(--saw);outline:none}
 .ce-num{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:8px;text-transform:uppercase;color:var(--text-dim);white-space:nowrap}
 .ce-num input{width:100%;text-align:center}
-.add-crew-row{display:grid;grid-template-columns:1fr 1fr auto auto;gap:7px;align-items:stretch}
+/* Four columns (name, role, hrs, button) never fit the settings card, which is
+   about 270px wide: it left ~57px each for the name input and the role select, so
+   "Name…" rendered as "Nam" and the select's native arrow sat on top of its own
+   text. Name now takes a full row of its own and the rest share the second row —
+   the same two-row shape .crew-edit-row already uses. */
+.add-crew-row{display:grid;grid-template-columns:1fr auto auto;grid-template-areas:"name name name" "role hrs btn";gap:7px;align-items:stretch}
+.add-crew-row .ac-name{grid-area:name}
+.add-crew-row .ac-role{grid-area:role}
+.add-crew-row .cap-field{grid-area:hrs}
+.add-crew-row .btn{grid-area:btn}
 .add-crew-row>input{width:100%}
 .add-crew-row .cap-field{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;text-transform:uppercase;color:var(--text-muted);border:1px solid var(--line-strong);border-radius:var(--radius);padding:0 8px;background:var(--surface-2)}
 .add-crew-row .cap-field input{width:38px;border:none;background:transparent;padding:8px 0;font-size:13px;font-family:var(--body)}
