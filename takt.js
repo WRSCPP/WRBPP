@@ -1,0 +1,344 @@
+/**
+ * takt.js — production-line flow model for WRB Planner.
+ *
+ * Pure functions only: no DOM, no Supabase, no imports from app.js. That is
+ * deliberate so this can be unit-tested from Node the way engine.js and
+ * analytics.js are, and so the Shop Overview, Gantt and the pace calculator all
+ * read the same numbers instead of each deriving their own.
+ *
+ * ---------------------------------------------------------------------------
+ * THE MODEL
+ *
+ * Builds enter at Bay 1 of their line and advance one bay at a time until they
+ * leave at the last bay (Long Line 10, Short Line 6). Every build visits every
+ * bay in order. The line advances as a PULSE: normally everything shifts
+ * together, with occasional exceptions where one build moves alone.
+ *
+ * Two consequences drive everything below.
+ *
+ * 1. A build cannot advance into an occupied bay. The line is a queue, so one
+ *    slow build stalls every build behind it. This is the single most useful
+ *    thing to model and the thing a per-build duration estimate cannot express.
+ *
+ * 2. How long a build sits in a bay is not a fixed property of the build or of
+ *    the bay — it is work content divided by the crew capacity working that bay:
+ *
+ *        dwell (pulses) = ceil( bay hours for this build / capacity per pulse )
+ *
+ *    which means "move the line faster" only works if capacity per pulse keeps
+ *    up. Shortening the pulse interval shrinks capacity per pulse, so dwell in
+ *    pulses rises and elapsed time may not improve at all. That is the honest
+ *    answer to "how fast can we go", and it falls straight out of the model
+ *    rather than needing a separate rule.
+ *
+ * ---------------------------------------------------------------------------
+ * VOCABULARY (standard lean terms, used here as the literature uses them)
+ *
+ *   pulse interval  Working days between line moves. 5 = weekly, 2.5 = twice a
+ *                   week. This is the takt the line is actually running.
+ *   required takt   The pulse interval a build needs in order to hit its target
+ *                   ship date from where it is now. What you need.
+ *   achievable takt The shortest pulse interval the line can sustain, set by the
+ *                   bay with the highest hours-to-capacity ratio. What you can
+ *                   actually do. The bottleneck bay determines line throughput
+ *                   no matter how fast the other bays are.
+ *   balance         Per-bay load as a fraction of the bottleneck. Bays well
+ *                   under 1.0 are idle capacity that could absorb work from the
+ *                   bottleneck; this is the input to a Yamazumi-style rebalance.
+ *
+ * Required faster than achievable means the date is not reachable at current
+ * staffing, and the gap is expressed in crew-hours at the bottleneck so it turns
+ * into a staffing decision rather than a shrug.
+ */
+
+// ----------------------------- Bay ↔ stage mapping -----------------------------
+
+/**
+ * A line's bays, each carrying the ordered stage ids worked in it.
+ *
+ * `mapping` is { bayId: [stageId, ...] }. Anything not mapped yields a bay with
+ * no stages, which contributes zero hours — so a partially configured mapping
+ * degrades to optimistic rather than throwing. `bayIds` must already be in
+ * physical order, Bay 1 first.
+ */
+export function bayPlan(bayIds, mapping = {}) {
+  return bayIds.map((id, i) => ({
+    id,
+    index: i,
+    position: i + 1,
+    stages: (mapping[id] || mapping[String(id)] || []).slice(),
+  }));
+}
+
+/**
+ * Evenly distribute stages across bays. Used only to seed the mapping so the
+ * feature is usable before anyone has configured it by hand — the real mapping
+ * has to come from the floor. Earlier bays get the extra stage when the split is
+ * uneven, which matches how work tends to front-load on a line.
+ */
+export function seedMapping(bayIds, stageIds) {
+  const out = {};
+  const n = bayIds.length;
+  if (!n) return out;
+  const per = Math.floor(stageIds.length / n);
+  const extra = stageIds.length % n;
+  let k = 0;
+  bayIds.forEach((id, i) => {
+    const take = per + (i < extra ? 1 : 0);
+    out[id] = stageIds.slice(k, k + take);
+    k += take;
+  });
+  return out;
+}
+
+// ----------------------------- Work content -----------------------------
+
+/** Planned hours for one build in one bay: the sum of that bay's stages. */
+export function bayHours(build, bay, hoursOf) {
+  return bay.stages.reduce((s, stageId) => s + (Number(hoursOf(build, stageId)) || 0), 0);
+}
+
+/**
+ * Standard hours per bay for a module type, averaged over reference builds
+ * (normally completed ones). This is the "routing" an ERP would hold: a
+ * per-product-type work content per station.
+ *
+ * Averaging over builds that actually logged hours in a bay, rather than over
+ * every reference build, matters for the same reason it did in the Build Hours
+ * Average row: a build that never reached a bay would drag its average to zero
+ * and make a late bay look free.
+ */
+export function standardBayHours(bays, refBuilds, hoursOf) {
+  const out = {};
+  for (const bay of bays) {
+    let total = 0, n = 0;
+    for (const b of refBuilds) {
+      const h = bayHours(b, bay, hoursOf);
+      if (h > 0) { total += h; n += 1; }
+    }
+    out[bay.id] = n ? total / n : 0;
+  }
+  return out;
+}
+
+/**
+ * Crew hours per week available to a bay.
+ *
+ * A person contributes to a bay when their role covers any stage worked in that
+ * bay. Someone whose role spans several bays is counted in each — they are one
+ * person who could work in any of them, not a fraction. That makes capacity an
+ * upper bound rather than a promise, which is the right direction to err for a
+ * feasibility check, and it is flagged here so nobody reads it as exact.
+ */
+export function bayCapacity(bay, crew, stagesForRole) {
+  const stages = new Set(bay.stages.map(String));
+  let hours = 0;
+  for (const p of crew) {
+    const covered = (stagesForRole(p.role) || []).some((s) => stages.has(String(s)));
+    if (covered) hours += Number(p.weeklyHours) || 0;
+  }
+  return hours;
+}
+
+// ----------------------------- Takt -----------------------------
+
+/**
+ * Cycle time of each bay in working days, for one build's work content:
+ *
+ *     days = hours / (weekly capacity / workdays per week)
+ *
+ * The largest of these is the line's cycle time — the bottleneck. A bay with no
+ * capacity but real hours is infeasible rather than infinitely slow, so it is
+ * reported as Infinity and the caller decides how to present that.
+ */
+export function bayCycleDays(hours, weeklyCapacity, workdaysPerWeek = 5) {
+  const h = Number(hours) || 0;
+  if (h <= 0) return 0;
+  const cap = Number(weeklyCapacity) || 0;
+  if (cap <= 0) return Infinity;
+  return h / (cap / workdaysPerWeek);
+}
+
+/**
+ * The shortest pulse interval the line can sustain, plus which bay sets it and
+ * how balanced the rest are.
+ */
+export function achievableTakt(bays, hoursFor, capacityFor, workdaysPerWeek = 5) {
+  const rows = bays.map((bay) => {
+    const hours = Number(hoursFor(bay)) || 0;
+    const capacity = Number(capacityFor(bay)) || 0;
+    return { bay, hours, capacity, cycleDays: bayCycleDays(hours, capacity, workdaysPerWeek) };
+  });
+  const finite = rows.filter((r) => Number.isFinite(r.cycleDays));
+  const starved = rows.filter((r) => !Number.isFinite(r.cycleDays));
+  const bottleneck = rows.reduce((a, b) => (b.cycleDays > a.cycleDays ? b : a), rows[0] || null);
+  const peak = bottleneck ? bottleneck.cycleDays : 0;
+  const totalWork = finite.reduce((s, r) => s + r.cycleDays, 0);
+  return {
+    pulseDays: peak,
+    bottleneck,
+    rows: rows.map((r) => ({ ...r, balance: peak > 0 && Number.isFinite(r.cycleDays) ? r.cycleDays / peak : 0 })),
+    starvedBays: starved.map((r) => r.bay.id),
+    // Line efficiency = total work / (stations x bottleneck). 1.0 is perfectly
+    // balanced; the shortfall is capacity being paid for and not used.
+    lineEfficiency: rows.length && peak > 0 ? totalWork / (rows.length * peak) : 0,
+  };
+}
+
+/**
+ * The pulse interval a build needs to finish its remaining bays by a date.
+ * `workdaysBetween` keeps the working calendar in the caller's hands so this
+ * module stays free of holiday rules.
+ */
+export function requiredTakt(baysRemaining, from, to, workdaysBetween) {
+  const n = Number(baysRemaining) || 0;
+  if (n <= 0) return { pulseDays: Infinity, workdays: 0, baysRemaining: 0, feasible: true };
+  const workdays = Math.max(0, workdaysBetween(from, to));
+  return { pulseDays: workdays / n, workdays, baysRemaining: n, feasible: workdays > 0 };
+}
+
+/**
+ * Compare what a build needs against what the line can do, and express any gap
+ * as crew hours at the bottleneck so it reads as a staffing decision.
+ */
+export function paceGap(required, achievable, workdaysPerWeek = 5, hoursPerPerson = 40) {
+  const need = required.pulseDays;
+  const can = achievable.pulseDays;
+  if (!Number.isFinite(need)) return { status: 'done', need, can };
+  if (need <= 0) return { status: 'impossible', need, can, note: 'No working days left before the target date.' };
+  if (can <= need) {
+    return { status: 'ok', need, can, slackDays: can > 0 ? need - can : need };
+  }
+  const b = achievable.bottleneck;
+  // Capacity needed at the bottleneck to bring its cycle time down to `need`.
+  const neededWeekly = b && b.hours > 0 ? (b.hours * workdaysPerWeek) / need : 0;
+  const deficit = Math.max(0, neededWeekly - (b ? b.capacity : 0));
+  return {
+    status: 'short',
+    need,
+    can,
+    shortfallDays: can - need,
+    bottleneckBay: b ? b.bay.id : null,
+    extraWeeklyHours: deficit,
+    extraPeople: deficit / hoursPerPerson,
+  };
+}
+
+// ----------------------------- Pulse simulation -----------------------------
+
+/**
+ * Walk the line forward pulse by pulse and record when each build reaches each
+ * bay and when it leaves.
+ *
+ * Builds are processed front-first (highest bay first) each pulse so a bay is
+ * vacated before the build behind tries to enter it. That ordering is the whole
+ * point: it is what produces realistic blocking instead of letting builds pass
+ * through each other.
+ *
+ * `dwellFor(build, bay)` returns required pulses in that bay (>= 1).
+ * `advanceDate(date, pulses)` moves a date forward by n pulses on the working
+ * calendar, again so no calendar logic lives here.
+ *
+ * Returns per-build timelines plus a blocking log, which is the diagnostic worth
+ * surfacing: it names which build was held up, in which bay, by which build.
+ */
+export function simulateLine({ bays, builds, start, dwellFor, advanceDate, maxPulses = 500 }) {
+  // Furthest along first. A build with no position yet is treated as waiting to
+  // enter Bay 1 (position 0) rather than being dropped.
+  const state = builds
+    .map((b) => ({
+      build: b,
+      pos: Number.isFinite(b.position) ? b.position : 0,
+      // Pulses of work already completed in the current bay. Defaults to 0,
+      // i.e. "just arrived" — a conservative assumption for a build that is
+      // already on the line when the forecast runs. Pass `pulsesInBay` on the
+      // build if the real figure is known; it shortens the first bay only.
+      pulsesHere: Number.isFinite(b.pulsesInBay) ? b.pulsesInBay : 0,
+      timeline: [],
+      done: false,
+    }))
+    .sort((a, b) => b.pos - a.pos);
+
+  const occupied = new Map(); // bay position -> state
+  for (const s of state) if (s.pos >= 1) occupied.set(s.pos, s);
+
+  const blocks = [];
+  let date = start;
+  let pulse = 0;
+
+  // Record the starting position of anything already on the line.
+  for (const s of state) {
+    if (s.pos >= 1) s.timeline.push({ pulse: 0, date, bay: bays[s.pos - 1].id, position: s.pos, entered: true });
+  }
+
+  while (pulse < maxPulses && state.some((s) => !s.done)) {
+    pulse += 1;
+    date = advanceDate(date, 1);
+
+    for (const s of state) {
+      if (s.done) continue;
+
+      // Not yet on the line: enter Bay 1 when it is free.
+      if (s.pos === 0) {
+        if (occupied.has(1)) { blocks.push({ pulse, date, build: s.build, bay: bays[0].id, blockedBy: occupied.get(1).build, waitingToEnter: true }); continue; }
+        s.pos = 1; s.pulsesHere = 0; occupied.set(1, s);
+        s.timeline.push({ pulse, date, bay: bays[0].id, position: 1, entered: true });
+        continue;
+      }
+
+      const bay = bays[s.pos - 1];
+      const need = Math.max(1, Math.ceil(dwellFor(s.build, bay) || 1));
+      s.pulsesHere += 1;
+      if (s.pulsesHere < need) continue; // still working in this bay
+
+      // Ready to move on.
+      if (s.pos >= bays.length) {
+        occupied.delete(s.pos);
+        s.done = true;
+        s.completedPulse = pulse;
+        s.completedDate = date;
+        s.timeline.push({ pulse, date, bay: bay.id, position: s.pos, exited: true });
+        continue;
+      }
+      const next = s.pos + 1;
+      if (occupied.has(next)) {
+        // Blocked: hold position and note who is in the way. pulsesHere keeps
+        // climbing so the delay is visible rather than silently absorbed.
+        blocks.push({ pulse, date, build: s.build, bay: bays[next - 1].id, blockedBy: occupied.get(next).build });
+        continue;
+      }
+      occupied.delete(s.pos);
+      s.pos = next;
+      s.pulsesHere = 0; // arrival is the start of the first work interval, not the end of one
+      occupied.set(next, s);
+      s.timeline.push({ pulse, date, bay: bays[next - 1].id, position: next, entered: true });
+    }
+  }
+
+  return {
+    pulses: pulse,
+    hitPulseLimit: pulse >= maxPulses && state.some((s) => !s.done),
+    builds: state.map((s) => ({
+      build: s.build,
+      startPosition: Number.isFinite(s.build.position) ? s.build.position : 0,
+      timeline: s.timeline,
+      completedPulse: s.completedPulse ?? null,
+      completedDate: s.completedDate ?? null,
+      finished: s.done,
+    })),
+    blocks,
+  };
+}
+
+/**
+ * Flowline (line-of-balance) series: for each build, the points to draw as a
+ * staircase of bay position against date. Converging lines mean one build is
+ * catching up to a slower one ahead — the collision a bar chart cannot show.
+ */
+export function flowlineSeries(sim) {
+  return sim.builds.map((b) => ({
+    build: b.build,
+    finished: b.finished,
+    points: b.timeline.map((t) => ({ date: t.date, position: t.position, bay: t.bay, exited: !!t.exited })),
+  }));
+}
