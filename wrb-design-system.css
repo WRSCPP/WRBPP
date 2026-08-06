@@ -1,0 +1,395 @@
+/* ============================================================================
+   WIND RIVER BUILT — DESIGN SYSTEM  v1.0
+   Product-agnostic. This file knows nothing about Production Planner, the CRM,
+   or any other module, and it must stay that way.
+
+   USE IT
+     <link rel="stylesheet" href="wrb-design-system.css">
+     <link rel="stylesheet" href="your-product-theme.css">   <!-- maps + applies -->
+
+   WHAT BELONGS HERE
+     Brand tokens, typography, brand motifs, and primitives that any Wind River
+     product would want. If a rule mentions a class that exists in only one
+     product, it belongs in that product's theme file instead.
+
+   COLORS were sampled programmatically from WRB_Icon_Stacked_Color.png.
+   Do not eyeball replacements — resample.
+   ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap');
+
+:root{
+
+  /* -- BRAND CORE ------------------------------------------------------- */
+  --wrb-charcoal:#39393A;      /* the logo's own dark; use for chrome        */
+  --wrb-charcoal-deep:#2E2E2F;
+  --wrb-clay:#9B6344;          /* primary accent                             */
+  --wrb-clay-deep:#7E4F35;
+  --wrb-sage:#848777;          /* secondary accent                           */
+
+  /* -- SURFACES --------------------------------------------------------- */
+  --wrb-white:#FFFFFF;
+  --wrb-bone:#FAF8F5;          /* app background                             */
+  --wrb-bone-2:#F2EEE8;        /* wells, table heads, alt rows               */
+  --wrb-bone-3:#E9E3DA;
+
+  /* -- TEXT ------------------------------------------------------------- */
+  --wrb-ink:#2B2B2C;
+  --wrb-ink-soft:#6A6259;
+  --wrb-ink-faint:#8E877E;
+
+  /* -- RULES ------------------------------------------------------------ */
+  --wrb-rule:#E3DDD4;
+  --wrb-rule-strong:#CFC7BB;
+
+  /* -- STATUS ----------------------------------------------------------- *
+   * These must stay clearly distinguishable from one another at a glance.
+   * An early draft tinted them all toward the warm brand neutrals and they
+   * became nearly identical on screen. Legibility outranks palette purity —
+   * do not re-tint these warm.                                             */
+  --wrb-ok:#4F7C46;            /* green  — on track / healthy               */
+  --wrb-warn:#B08637;          /* ochre  — at risk / needs attention        */
+  --wrb-bad:#9B4A33;           /* clay   — late / failed                    */
+  --wrb-info:#3E6C8C;          /* blue   — shipped / complete / neutral info */
+  --wrb-idle:#8A7B6A;          /* warm gray — inactive / archived           */
+
+
+  /* -- INTERACTION STATES ----------------------------------------------- */
+  --wrb-focus:#9B6344;                       /* focus ring core            */
+  --wrb-focus-ring:rgba(155,99,68,.32);      /* focus ring halo            */
+  --wrb-disabled-opacity:.45;
+  --wrb-hover-tint:rgba(57,57,58,.035);      /* row / card hover           */
+  --wrb-active-tint:rgba(57,57,58,.07);      /* pressed                    */
+  --wrb-readonly-tint:rgba(132,135,119,.10); /* viewer mode wash (sage)    */
+
+  /* -- TYPE ------------------------------------------------------------- */
+  --wrb-font:'Figtree',system-ui,-apple-system,sans-serif;
+  --wrb-weight-body:400;
+  --wrb-weight-medium:500;
+  --wrb-weight-bold:700;
+  --wrb-weight-display:800;
+
+  /* Label tracking. The wide letterspaced caps treatment is lifted from
+     windriverbuilt.com and is the most portable piece of the brand's voice. */
+  --wrb-track-label:.15em;
+  --wrb-track-eyebrow:.20em;
+
+  /* -- SHAPE ------------------------------------------------------------ *
+   * The logo is built from hard angles. Corners stay tight everywhere.     */
+  --wrb-radius:2px;
+  --wrb-radius-lg:3px;
+
+  /* -- SPACING ---------------------------------------------------------- */
+  --wrb-space-1:4px;  --wrb-space-2:8px;  --wrb-space-3:12px;
+  --wrb-space-4:16px; --wrb-space-5:24px; --wrb-space-6:32px;
+
+  /* -- BRAND MOTIFS ----------------------------------------------------- *
+   * Exposed as custom properties so any product can apply them to its own
+   * classes without copying SVG around. See §4 for how to use them.        */
+
+  /* Roofline: the peak from the logo, as a clip-path for a pitched edge. */
+  --wrb-roofline-clip:polygon(0 0, 100% 0, 100% 0, 58% 100%, 33% 38%, 0 0);
+
+  /* Elevation line-art: module profiles. Three sizes, same drawing family. */
+  --wrb-elevation-wide:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='240' height='78' fill='none' stroke='%239B6344' stroke-width='1.4' stroke-linejoin='round'>\
+<path d='M3 74V38l30-17 30 17v36'/><path d='M17 74V54h12v20'/><path d='M43 51h12v11H43z'/>\
+<path d='M84 74V34h42v40'/><path d='M84 34l21-13 21 13'/><path d='M97 74V53h11v21'/><path d='M114 50h9v10h-9z'/>\
+<path d='M146 74V28l39-17 39 17v46'/><path d='M164 74V48h17v26'/><path d='M193 45h15v13h-15z'/>\
+<path d='M0 74h240' stroke-width='1.6'/></svg>");
+
+  --wrb-elevation-pair:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='150' height='64' fill='none' stroke='%239B6344' stroke-width='1.5' stroke-linejoin='round'>\
+<path d='M4 60V30l28-15 28 15v30'/><path d='M18 60V44h13v16'/><path d='M42 38h11v11H42z'/>\
+<path d='M84 60V24l30-16 30 16v36'/><path d='M100 60V42h15v18'/><path d='M124 34h12v12h-12z'/>\
+<path d='M0 60h150' stroke-width='1.7'/></svg>");
+
+  --wrb-elevation-single:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' fill='none' stroke='%239B6344' stroke-width='1.5' stroke-linejoin='round'>\
+<path d='M3 27V13L20 4l17 9v14'/><path d='M13 27v-9h8v9'/><path d='M0 27h56' stroke-width='1.7'/></svg>");
+}
+
+/* ============================================================================
+   2. BASE
+   ============================================================================ */
+
+/* Tabular figures everywhere. The brand has no monospace face, so numeric
+   columns get their alignment from Figtree's tabular numerals rather than by
+   importing a typeface that isn't ours. */
+body, table, input, select, textarea, button{
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;
+}
+
+/* ============================================================================
+   3. PRIMITIVES — generic classes any product can use directly
+   ============================================================================ */
+
+/* -- Eyebrow: small caps label above a heading ---------------------------- */
+.wrb-eyebrow{
+  font-family:var(--wrb-font);
+  font-size:9.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:var(--wrb-track-eyebrow);
+  text-transform:uppercase;
+  color:var(--wrb-clay);
+}
+
+/* -- Label: caps used for nav, table heads, buttons ----------------------- */
+.wrb-label{
+  font-family:var(--wrb-font);
+  font-size:10px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:var(--wrb-track-label);
+  text-transform:uppercase;
+}
+
+/* -- Display heading. Brand voice ends these with a period ---------------- */
+.wrb-display{
+  font-family:var(--wrb-font);
+  font-weight:var(--wrb-weight-display);
+  letter-spacing:-.02em;
+  color:var(--wrb-ink);
+}
+
+/* -- Stat: big number over an italic label (as used on windriverbuilt.com) - */
+.wrb-stat-value{
+  font-family:var(--wrb-font);
+  font-weight:var(--wrb-weight-display);
+  font-size:29px;
+  line-height:1;
+  letter-spacing:-.02em;
+  color:var(--wrb-ink);
+}
+.wrb-stat-label{
+  font-size:12.5px;
+  font-style:italic;
+  color:var(--wrb-ink-faint);
+  margin-top:6px;
+}
+
+/* -- Status tag ----------------------------------------------------------- */
+.wrb-tag{
+  display:inline-block;
+  font-family:var(--wrb-font);
+  font-size:9px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  padding:4px 10px;
+  border-radius:var(--wrb-radius);
+}
+.wrb-tag--ok  { background:#EDF1E9; color:#3C5F35 }
+.wrb-tag--warn{ background:#F6EEDC; color:#856223 }
+.wrb-tag--bad { background:#F4E6E1; color:#803524 }
+.wrb-tag--info{ background:#E4EBF1; color:#2F5570 }
+.wrb-tag--idle{ background:var(--wrb-bone-2); color:#7C756C }
+
+/* -- Button --------------------------------------------------------------- */
+.wrb-btn{
+  font-family:var(--wrb-font);
+  font-size:10.5px;
+  font-weight:var(--wrb-weight-bold);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  padding:9px 17px;
+  border:1px solid var(--wrb-rule);
+  border-radius:var(--wrb-radius);
+  background:var(--wrb-white);
+  color:var(--wrb-ink-soft);
+  cursor:pointer;
+}
+.wrb-btn--primary{
+  background:var(--wrb-clay);
+  border-color:var(--wrb-clay);
+  color:#fff;
+}
+.wrb-btn--primary:hover{
+  background:var(--wrb-clay-deep);
+  border-color:var(--wrb-clay-deep);
+}
+
+/* ============================================================================
+   4. BRAND MOTIFS — apply these to your product's own elements
+   ============================================================================ */
+
+/* -- Roofline pitch ------------------------------------------------------- *
+ * Put .wrb-roofline on any element that should have a pitched bottom edge,
+ * or copy this rule onto your own class:
+ *
+ *   .my-navbar::after{ ...same as below... }
+ */
+.wrb-roofline{ position:relative }
+.wrb-roofline::after{
+  content:'';
+  position:absolute;
+  left:0; right:0; bottom:-14px;
+  height:14px;
+  background:inherit;
+  clip-path:var(--wrb-roofline-clip);
+  pointer-events:none;
+  z-index:1;
+}
+
+/* -- Dimension line ------------------------------------------------------- *
+ * A progress track drawn the way a measured length is drawn on a shop
+ * drawing: squared rail, upright ticks at both ends, hard terminal tick
+ * where the fill stops.
+ *   <div class="wrb-dim"><div class="wrb-dim__fill" style="width:44%"></div></div>
+ */
+.wrb-dim{
+  position:relative;
+  height:5px;
+  background:var(--wrb-bone-2);
+  border-left:1px solid var(--wrb-rule-strong);
+  border-right:1px solid var(--wrb-rule-strong);
+}
+.wrb-dim::before,
+.wrb-dim::after{
+  content:'';
+  position:absolute;
+  top:-4px;
+  width:1px;
+  height:13px;
+  background:var(--wrb-rule-strong);
+  pointer-events:none;
+}
+.wrb-dim::before{ left:-1px }
+.wrb-dim::after { right:-1px }
+
+.wrb-dim__fill{
+  position:absolute;
+  left:0; top:0;
+  height:100%;
+  background:var(--wrb-clay);
+  min-width:2px;
+}
+.wrb-dim__fill::after{
+  content:'';
+  position:absolute;
+  right:-1px; top:-4px;
+  width:1px; height:13px;
+  background:var(--wrb-ink);
+  opacity:.55;
+}
+
+/* -- Elevation art -------------------------------------------------------- *
+ * Decorative only. Wrapped in @media screen so it never reaches paper.
+ */
+@media screen{
+  .wrb-elevation-wide,
+  .wrb-elevation-pair,
+  .wrb-elevation-single{
+    background-repeat:no-repeat;
+    background-position:center;
+    background-size:contain;
+    pointer-events:none;
+  }
+  .wrb-elevation-wide  { background-image:var(--wrb-elevation-wide);   width:240px; height:78px }
+  .wrb-elevation-pair  { background-image:var(--wrb-elevation-pair);   width:150px; height:64px }
+  .wrb-elevation-single{ background-image:var(--wrb-elevation-single); width:56px;  height:30px }
+}
+
+
+/* ============================================================================
+   6. INTERACTION STATES
+   Applies to every product. Any module inheriting this file gets consistent
+   focus, disabled, hover and read-only behaviour for free.
+   ============================================================================ */
+
+/* -- FOCUS ---------------------------------------------------------------- *
+ * Deliberately implemented with box-shadow rather than outline.
+ *
+ * Products commonly carry legacy rules like `.field input:focus{outline:none}`
+ * at a specificity a generic override cannot beat. Those rules do not touch
+ * box-shadow, so a ring drawn this way lands regardless of specificity — no
+ * cascade fight, and no need to edit the legacy stylesheet.
+ *
+ * :focus-visible (not :focus) means the ring appears for keyboard navigation
+ * but not on mouse click, which is the behaviour people expect.
+ * ------------------------------------------------------------------------- */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible,
+[contenteditable]:focus-visible{
+  box-shadow:0 0 0 3px var(--wrb-focus-ring);
+  border-color:var(--wrb-focus);
+  position:relative;
+  z-index:2;                 /* keep the ring above neighbouring rows */
+}
+
+/* Elements that had their outline stripped entirely still need an indicator. */
+[role="button"]:focus-visible{
+  box-shadow:0 0 0 3px var(--wrb-focus-ring);
+}
+
+/* -- DISABLED -------------------------------------------------------------- *
+ * A disabled control must be obviously inert — not merely faded. Cursor,
+ * saturation and background all change so the state reads without guessing.
+ * ------------------------------------------------------------------------- */
+input:disabled,
+select:disabled,
+textarea:disabled,
+button:disabled,
+input[readonly],
+textarea[readonly]{
+  opacity:var(--wrb-disabled-opacity);
+  cursor:not-allowed;
+  background:var(--wrb-bone-2);
+  color:var(--wrb-ink-faint);
+  filter:saturate(.4);
+  box-shadow:none;
+}
+button:disabled{ filter:saturate(.25) }
+
+/* Never show a hover affordance on something that cannot be used. */
+button:disabled:hover,
+input:disabled:hover,
+select:disabled:hover{ background:var(--wrb-bone-2) }
+
+/* -- HOVER / ACTIVE -------------------------------------------------------- */
+.wrb-btn:hover{ background:var(--wrb-bone-2) }
+.wrb-btn:active{ transform:translateY(1px) }
+.wrb-btn--primary:active{ transform:translateY(1px) }
+
+/* -- READ-ONLY MODE -------------------------------------------------------- *
+ * Products with a viewer tier should mark the body (e.g. body.readonly).
+ * Controls that cannot be used are muted rather than removed, so the layout
+ * stays stable and viewers still understand what the tool does.
+ * ------------------------------------------------------------------------- */
+.wrb-readonly-control{
+  opacity:.55;
+  pointer-events:none;
+  filter:saturate(.3);
+}
+
+/* -- MOTION ---------------------------------------------------------------- */
+.wrb-btn,
+input, select, textarea{
+  transition:box-shadow .12s ease, border-color .12s ease, background .12s ease;
+}
+
+/* Respect users who have asked for reduced motion. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+
+/* ============================================================================
+   5. PRINT
+   The brand's decorative layer has no business on a shop-floor printout.
+   Products should keep their own @media print rules untouched by theming.
+   ============================================================================ */
+@media print{
+  .wrb-roofline::after,
+  .wrb-elevation-wide,
+  .wrb-elevation-pair,
+  .wrb-elevation-single{ display:none !important }
+}

@@ -114,6 +114,21 @@ main{padding:22px 26px 64px}
 .g-wrap{border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);overflow:hidden}
 .g-scroll{overflow-x:auto;position:relative}
 .g-inner{display:block}
+/* ---------------------------------------------------------------------------
+   Display scale for the two dense tabs (Gantt, Build Hours).
+   --tab-zoom 0.8 reproduces what browser zoom at 80% gives, as a default so the
+   whole schedule fits without scrolling. Set it to 1 to go back to full size.
+
+   IMPORTANT: CSS zoom scales every length inside the element, INCLUDING the
+   vh-based max-height on the scroll containers. Left alone, the rows get 20%
+   shorter and so does the box holding them, so exactly the same number of rows
+   would be visible and the zoom would achieve nothing. The scroll containers
+   therefore divide their height by --tab-zoom to cancel that out, leaving the
+   viewport-filling box the same visual size while the content inside it shrinks.
+   --------------------------------------------------------------------------- */
+:root{--tab-zoom:0.8;--g-row-h:56px;--g-bar-h:26px}
+#ganttRoot,#hoursRoot{zoom:var(--tab-zoom)}
+
 .g-label-sp,.g-label{flex:0 0 234px;width:234px;min-width:234px;max-width:234px;box-sizing:border-box;position:sticky;left:0;z-index:4;background:var(--card);border-right:1.5px solid var(--line-strong)}
 .g-head{display:flex;border-bottom:1.5px solid var(--ink)}
 .g-label-sp{height:34px;display:flex;align-items:center;padding:0 13px;font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--text-dim);z-index:6}
@@ -125,12 +140,17 @@ main{padding:22px 26px 64px}
 .g-row{display:flex;border-bottom:1px solid var(--line)}.g-row:last-child{border-bottom:none}
 .g-row.group .g-label{background:var(--paper-2);font-family:var(--display);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);display:flex;align-items:center;padding:0 13px;height:30px}
 .g-row.group .g-track{background:var(--paper-2);height:30px}
-.g-row:not(.group) .g-label{padding:7px 13px;display:flex;flex-direction:column;justify-content:center;height:48px;cursor:pointer}
+/* Row height comes from --g-row-h so the label, the track and the bar's vertical
+   centring can never drift apart. Raised from 48px to fit two lines of build name;
+   every row uses it, so rows stay uniform regardless of name length. */
+.g-row:not(.group) .g-label{padding:7px 13px;display:flex;flex-direction:column;justify-content:center;height:var(--g-row-h);cursor:pointer}
 .g-row:not(.group) .g-label:hover{background:var(--surface-2)}
-.g-name{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;min-width:0}
+/* Build names wrap to two lines instead of being cut off with an ellipsis. The
+   clamp is what keeps rows uniform: a longer name wraps, it never grows the row. */
+.g-name{font-weight:600;font-size:12px;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:break-word;max-width:100%;min-width:0}
 .g-meta{font-family:var(--mono);font-size:9.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;min-width:0}
-.g-track{position:relative;flex:0 0 auto;height:48px}
-.g-bar{position:absolute;top:11px;height:26px;border-radius:3px;display:flex;align-items:center;padding:0 9px;font-size:11px;font-weight:600;color:#fff;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.18);box-shadow:0 1px 2px rgba(31,42,51,.12)}
+.g-track{position:relative;flex:0 0 auto;height:var(--g-row-h)}
+.g-bar{position:absolute;top:calc((var(--g-row-h) - var(--g-bar-h)) / 2);height:var(--g-bar-h);border-radius:3px;display:flex;align-items:center;padding:0 9px;font-size:11px;font-weight:600;color:#fff;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.18);box-shadow:0 1px 2px rgba(31,42,51,.12)}
 .g-bar.tentative{background:repeating-linear-gradient(45deg,var(--surface-2),var(--surface-2) 5px,var(--paper) 5px,var(--paper) 10px)!important;border:1.5px dashed var(--line-strong);color:var(--text-muted)}
 .g-bar:hover{filter:brightness(1.06)}
 .g-target{position:absolute;top:4px;bottom:4px;width:0;border-left:2px dashed var(--ink);z-index:3}
@@ -312,7 +332,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .bay-slot{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);font-size:12px;min-height:38px;transition:border-color .12s,background .12s}
 .bay-slot.open{opacity:.75}
 .bay-slot.filled{border-left:3px solid var(--pine)}
-.bay-slot.conflict{border-left:3px solid var(--clay);background:color-mix(in srgb,var(--clay) 8%,var(--surface-2))}
+.bay-slot.conflict{border-left:3px solid var(--timber);background:color-mix(in srgb,var(--timber) 8%,var(--surface-2))}
 .bay-slot.drop-hover{border-color:var(--saw);border-style:dashed;background:color-mix(in srgb,var(--saw) 10%,var(--surface-2))}
 .bay-num{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);min-width:44px;flex:0 0 auto}
 .bay-occupant{flex:1;display:flex;flex-wrap:wrap;gap:5px;min-width:0}
@@ -324,6 +344,60 @@ html,body{max-width:100%;overflow-x:hidden}
 
 /* bay conflict warning in the build modal */
 .bay-warning{margin:12px 0 0;padding:10px 13px;border:1px solid var(--clay);border-left:4px solid var(--clay);border-radius:var(--radius);background:color-mix(in srgb,var(--clay) 7%,var(--card));font-size:12.5px;color:var(--clay);line-height:1.5}
+/* Sharing a bay is a normal way the floor operates, not an error, so this note is
+   informational: same shape as .bay-warning but in neutral ink with no icon. */
+.bay-shared{margin:12px 0 0;padding:10px 13px;border:1px solid var(--line-strong);border-left:4px solid var(--timber);border-radius:var(--radius);background:var(--surface-2);font-size:12.5px;color:var(--text-muted);line-height:1.5}
+
+/* ---------------------------------------------------------------------------
+   Line Routing card. Spans the full settings grid because it is a matrix, not a
+   list: stage assignments on the left, resulting bay load on the right, so an
+   imbalance is visible while you are still mapping rather than after.
+   --------------------------------------------------------------------------- */
+.lr-card{grid-column:1/-1}
+.lr-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.lr-tab{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 11px;font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);cursor:pointer;font-weight:700}
+.lr-tab:hover{border-color:var(--timber)}
+.lr-tab.active{background:var(--timber);border-color:var(--timber);color:#fff}
+.lr-warn{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--amber);background:color-mix(in srgb,var(--amber) 8%,var(--card));font-size:11.5px;color:var(--text-muted);border-radius:var(--radius)}
+.lr-split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.2fr);gap:16px;align-items:start}
+@media (max-width:900px){.lr-split{grid-template-columns:1fr}}
+
+.lr-table-wrap{max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--radius)}
+.lr-table{width:100%;border-collapse:collapse;font-size:12px}
+.lr-table thead th{position:sticky;top:0;background:var(--paper-2);z-index:2;text-align:left;padding:7px 9px;font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);border-bottom:1px solid var(--line-strong)}
+.lr-table td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
+.lr-table tr:last-child td{border-bottom:none}
+.lr-table tr.lr-unassigned{background:color-mix(in srgb,var(--amber) 6%,transparent)}
+.lr-stage{font-weight:600;color:var(--ink)}
+.lr-bay{width:100%;min-width:0;background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:5px 24px 5px 7px;font-size:12px;font-family:var(--body)}
+.lr-bay:focus{border-color:var(--saw);outline:none}
+.lr-mr{text-align:center;width:44px}
+.lr-mr input{width:14px;height:14px;margin:0;cursor:pointer}
+
+.lr-load{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;background:var(--surface-2)}
+.lr-load-head,.lr-load-row{display:grid;grid-template-columns:52px 1fr 54px 66px 44px;gap:8px;align-items:center}
+.lr-load-head{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);padding-bottom:6px;border-bottom:1px solid var(--line)}
+.lr-load-row{padding:4px 0;font-size:11.5px}
+.lr-load-bay{font-weight:600;color:var(--text-muted)}
+.lr-load-track{height:9px;background:var(--card);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.lr-load-fill{display:block;height:100%;background:var(--pine)}
+.lr-load-row.neck .lr-load-fill{background:var(--clay)}
+.lr-load-row.neck .lr-load-bay{color:var(--clay)}
+.lr-load-row.starved .lr-load-cap{color:var(--clay);font-weight:700}
+.lr-load-num,.lr-load-days{font-family:var(--mono);font-size:10.5px;text-align:right;color:var(--text-muted)}
+.lr-load-cap{font-family:var(--mono);font-size:9.5px;color:var(--text-dim)}
+.lr-summary{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--text-muted)}
+.lr-summary strong{color:var(--ink)}
+.lr-note{font-size:10.5px;color:var(--text-dim);font-style:italic}
+.lr-summary .lr-warn{margin:4px 0 0}
+
+/* Multi-select bay picker in the build panel. */
+.bay-pick{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.bay-pick-opt{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);font-size:11.5px;cursor:pointer;user-select:none}
+.bay-pick-opt:hover{border-color:var(--timber)}
+.bay-pick-opt.on{background:color-mix(in srgb,var(--timber) 12%,var(--card));border-color:var(--timber);font-weight:600}
+.bay-pick-opt input{margin:0;width:12px;height:12px}
+.bay-pick-hint{flex:1 0 100%;font-size:11px;color:var(--text-dim);margin-top:2px}
 
 /* ---------- build history timeline (reports) ---------- */
 .rep-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -356,12 +430,41 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-map.no-img .shop-img-missing{display:flex}
 .shop-band{position:absolute;background:var(--card);border-radius:4px;z-index:1}
 .shop-bay{position:absolute;box-sizing:border-box;border:2px solid transparent;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;line-height:1.1;padding:2px;transition:transform .08s,box-shadow .12s;overflow:hidden;z-index:2}
-.shop-bay.occupied{background:var(--bay-color);border-color:var(--bay-color);color:#fff;box-shadow:0 0 0 1px var(--card)}
-.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong);box-shadow:0 0 0 2px var(--surface-2)}
+/* Occupied bays previously carried `box-shadow:0 0 0 1px var(--card)` as a
+   separator. Same problem as .shop-bay.empty below, just 1px instead of 2px:
+   it painted outside the box and bled over the adjacent bay. Adjacent occupied
+   bays still need separating — without it a run of green bays merges into one
+   blob — so the separation moves INSIDE the box: .shop-bay already reserves a
+   2px border, and tinting it to the band colour gives every bay a light inset
+   frame. Two neighbours therefore show a 4px gap, entirely within their own
+   bounds, overlapping nothing. */
+.shop-bay.occupied{background:var(--bay-color);border-color:var(--card);color:#fff}
+/* `empty` is also a generic empty-state utility class (see .empty around line 67,
+   restyled again in planner-theme.css). That rule sets a large padding and an
+   ::before illustration, and it collides with .shop-bay.empty here.
+   .shop-bay{padding:2px} and .empty{padding:...} have identical specificity
+   (0,1,0), so before the theme existed the bays kept 2px only because
+   .shop-bay came later in this file. planner-theme.css loads third and won that
+   tiebreak, giving every open bay 44px of horizontal padding — and because
+   box-sizing is border-box a box cannot shrink below its own padding, the inline
+   width:6.259% was discarded and every empty bay rendered 92px wide instead of
+   75.55px, overlapping its neighbours by 16.45px. Spray Foam, also .empty, blew
+   out from 37.8px to 92px and swallowed Bay 3.
+   Setting these here at (0,2,0) makes the bays immune to that collision
+   regardless of stylesheet order, and content:none drops the illustration.
+   border-radius and font are pinned for the same reason: the generic rule sets
+   both, so open bays were rendering with a 2px radius against the occupied bays'
+   4px until these were restated. */
+.shop-bay.empty{background:var(--surface-2);border:2px dashed var(--line-strong);padding:2px;border-radius:4px;font-family:inherit;font-size:inherit}
+.shop-bay.empty::before{content:none}
 .shop-bay:hover{transform:scale(1.03);box-shadow:0 3px 10px rgba(31,42,51,.25);z-index:5}
 .shop-bay-num{font-family:var(--mono);font-size:11px;font-weight:700}
 .shop-bay.empty .shop-bay-num{color:var(--text-muted)}
-.shop-bay-build{font-family:var(--body);font-size:9.5px;font-weight:600;text-align:center;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;max-width:100%}
+/* Bays are tall and narrow (roughly 74 x 163px at a typical window size), so a
+   2-line clamp was truncating most real build names — "Ofland - Workforce.."
+   — while leaving most of the cell empty. There is room for four lines with
+   plenty to spare. overflow-wrap keeps a single long token from spilling out. */
+.shop-bay-build{font-family:var(--body);font-size:9.5px;font-weight:600;text-align:center;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;max-width:100%;overflow-wrap:anywhere}
 .shop-bay-open{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim)}
 .shop-line-labels{display:flex;gap:24px;flex-wrap:wrap;margin-top:8px}
 .shop-line-label{font-size:12.5px;color:var(--text-muted)}
@@ -372,6 +475,22 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-bay.spray-foam .shop-bay-num{color:var(--timber);font-size:9px}
 .shop-bay.spray-foam.occupied .shop-bay-num{color:#fff}
 .shop-bay.spray-foam .shop-bay-open{font-size:7px}
+
+/* A line divides into lanes when any of its bays holds more than one build, so
+   every cell in that row gets shorter. Shrink the type and drop the secondary
+   label so the contents still fit rather than clipping. */
+.shop-bay.compact{padding:1px}
+.shop-bay.compact .shop-bay-num{font-size:9px}
+.shop-bay.compact .shop-bay-build{font-size:8.5px;-webkit-line-clamp:2;line-height:1.1}
+.shop-bay.compact .shop-bay-open{font-size:7px}
+
+/* Drag feedback. A build box is the drag handle; open slots and other build boxes
+   are drop targets. drop-hover = move here, drop-hover-add = Shift, i.e. add this
+   bay to the build's set rather than replacing it. */
+.shop-build{cursor:grab}
+.shop-build.dragging{opacity:.4;cursor:grabbing}
+.shop-bay.drop-hover{outline:2px solid var(--timber);outline-offset:-2px;filter:brightness(1.04)}
+.shop-bay.drop-hover-add{outline:2px dashed var(--pine);outline-offset:-2px;filter:brightness(1.06)}
 
 /* ---------- Bay picker modal ---------- */
 .modal.modal-sm{max-width:440px}
@@ -406,7 +525,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .hf select{min-width:120px}
 .hf-search{min-width:180px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--card);font-size:12.5px}
 .hours-filters .btn{margin-left:auto}
-.hours-grid-wrap{overflow:auto;border:1px solid var(--line-strong);border-radius:var(--radius);max-height:calc(100vh - 300px)}
+.hours-grid-wrap{overflow:auto;border:1px solid var(--line-strong);border-radius:var(--radius);max-height:calc((100vh - 300px) / var(--tab-zoom))}
 .hours-grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%}
 .hours-grid th,.hours-grid td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);white-space:nowrap}
 .hours-grid thead th{position:sticky;top:0;z-index:3;background:var(--surface-2);font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);font-weight:600;padding:8px 6px;text-align:center;vertical-align:bottom}
@@ -429,8 +548,46 @@ html,body{max-width:100%;overflow-x:hidden}
 .bh-status-pill{font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;padding:2px 8px;border-radius:20px;border:1px solid;font-weight:600}
 .bh-status-pill.active{color:var(--saw);border-color:var(--saw)}
 .bh-status-pill.done{color:var(--shipped);border-color:var(--shipped)}
-.bh-totals-row td{position:sticky;bottom:0;z-index:4;background:var(--paper-2);font-weight:700;box-shadow:inset 0 2px 0 var(--ink);padding:7px 8px;vertical-align:middle;height:auto}
-.bh-totals-row .bh-name{position:sticky;left:0;bottom:0;background:var(--paper-2);z-index:6;box-shadow:inset 0 2px 0 var(--ink);display:table-cell;padding:7px 10px}
+/* Two summary rows are pinned to the bottom of the scroll area: Totals, then
+   Average beneath it. Both are position:sticky, so the upper one has to be
+   offset by the height of the lower one or they stack on top of each other.
+   --bh-avg-h is measured after render (see setSummaryRowOffset in app.js)
+   because row height depends on font and zoom; the 30px fallback only applies
+   for the first paint before that runs. */
+.bh-totals-row td{position:sticky;bottom:var(--bh-avg-h,30px);z-index:4;background:var(--paper-2);font-weight:700;box-shadow:inset 0 2px 0 var(--ink);padding:7px 8px;vertical-align:middle;height:auto}
+.bh-totals-row .bh-name{position:sticky;left:0;bottom:var(--bh-avg-h,30px);background:var(--paper-2);z-index:6;box-shadow:inset 0 2px 0 var(--ink);display:table-cell;padding:7px 10px}
+/* Average row: same pinning, one step quieter than Totals so Totals still reads
+   as the primary summary. No top rule — it sits directly under Totals. */
+.bh-avg-row td{position:sticky;bottom:0;z-index:4;background:var(--paper-2);font-weight:600;padding:7px 8px;vertical-align:middle;height:auto;color:var(--text-muted)}
+.bh-avg-row .bh-name{position:sticky;left:0;bottom:0;background:var(--paper-2);z-index:6;display:table-cell;padding:7px 10px;font-weight:700;color:var(--text-muted)}
+.bh-avg-cell{text-align:center;font-family:var(--mono);font-size:11px}
+
+/* --- Summary rows must stay opaque, whatever else is loaded ------------------
+   planner-theme.css adds `tbody tr:hover > td{background:var(--wrb-hover-tint)}`,
+   and that tint is rgba(...,.035) — 96.5% transparent. Specificity there is
+   (0,1,3), which beats a plain `.bh-avg-row td` at (0,1,1), so on hover these
+   sticky rows lost their opaque background and the stage-hour cells scrolling
+   underneath showed straight through them.
+
+   The corrective rules used to live in planner-theme.css, which meant the fix
+   only worked if that file was up to date. These live here instead, next to the
+   rest of the table, at (0,2,3) — high enough to win on specificity alone rather
+   than on stylesheet order, so nothing can undo them. The hover tint is
+   reapplied composited over each row's own opaque base, so the feedback looks
+   identical but nothing behind can bleed through.
+
+   z-index is also raised above the body rows' sticky name column (which sits at
+   5); at 4 a body name cell would have painted over the summary rows. */
+.hours-grid tbody tr.bh-totals-row > td,
+.hours-grid tbody tr.bh-avg-row > td{background:var(--paper-2);z-index:7}
+.hours-grid tbody tr.bh-totals-row > td.bh-name,
+.hours-grid tbody tr.bh-avg-row > td.bh-name{background:var(--paper-2);z-index:8}
+.hours-grid tbody tr.bh-totals-row:hover > td,
+.hours-grid tbody tr.bh-avg-row:hover > td,
+.hours-grid tbody tr.bh-totals-row:hover > td.bh-name,
+.hours-grid tbody tr.bh-avg-row:hover > td.bh-name{
+  background:color-mix(in srgb, var(--ink) 3.5%, var(--paper-2));
+}
 .bh-total-cell{text-align:center;font-family:var(--mono);font-size:11px}
 
 /* ---------- drag-to-reorder ---------- */
@@ -463,7 +620,17 @@ html,body{max-width:100%;overflow-x:hidden}
 .hours-grid tbody tr.bh-alt .bh-input:hover{background:var(--surface-3)}
 
 /* Build Hours: row-highlight toggle */
-.bh-name{display:flex;align-items:center;gap:6px}
+/* The name cell MUST stay a real table cell. This rule used to set
+   `.bh-name{display:flex}` so the ★ button and name could sit side by side —
+   but .bh-name is a <td> that is also `position:sticky; left:0`. Changing a
+   table cell's display takes it out of the table layout model (the browser
+   wraps it in an anonymous cell box), which broke the frozen first column:
+   the hour inputs scrolled out from underneath it, and since .bh-input:hover
+   paints its own background, hovering the name lit up the stage-hour cells
+   showing through. The flex layout now lives on an inner wrapper div instead,
+   leaving the cell itself a plain sticky table-cell. */
+.bh-name{display:table-cell}
+.bh-name-inner{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
 .bh-name-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .bh-highlight-btn{flex:0 0 auto;background:transparent;border:none;cursor:pointer;color:var(--line-strong);font-size:13px;line-height:1;padding:2px;border-radius:3px}
 .bh-highlight-btn:hover{color:var(--amber)}
@@ -527,7 +694,9 @@ body.col-resizing *{cursor:col-resize!important}
 .lc-bay{position:relative;min-height:56px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);padding:6px 8px;display:flex;flex-direction:column;gap:3px;transition:border-color .12s,background .12s}
 .lc-bay.filled{border-left:3px solid var(--bc,var(--pine));background:var(--card)}
 .lc-bay.open{opacity:.6}
-.lc-bay.conflict{border-color:var(--clay);border-left:3px solid var(--clay);background:color-mix(in srgb,var(--clay) 7%,var(--card));opacity:1}
+/* Formerly .conflict, styled as an error. Two active builds in one bay is now a
+   supported arrangement, so this reads as a neutral "shared" marker instead. */
+.lc-bay.conflict{border-color:var(--timber);border-left:3px solid var(--timber);background:color-mix(in srgb,var(--timber) 7%,var(--card));opacity:1}
 .lc-bay.drop-hover{border-color:var(--saw);border-style:dashed;background:color-mix(in srgb,var(--saw) 10%,var(--surface-2));opacity:1}
 .lc-baynum{font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);font-weight:600}
 .lc-occ{display:flex;flex-wrap:wrap;gap:3px;flex:1;align-items:flex-start}
@@ -541,11 +710,12 @@ body.col-resizing *{cursor:col-resize!important}
 /* ---------- Crew (people) settings ---------- */
 .crew-edit-list{display:flex;flex-direction:column;gap:9px;margin-bottom:12px;max-height:230px;overflow-y:auto;overflow-x:hidden;padding-right:2px}
 .crew-filter{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim)}
-.crew-filter select{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 8px;font-size:12px;font-family:var(--body)}
+/* Room for the native arrow so a long role name can't run underneath it. */
+.crew-filter select{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 26px 6px 8px;font-size:12px;font-family:var(--body)}
 .crew-filter select:focus{border-color:var(--saw);outline:none}
-.crew-edit-row select.ce-role{background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:7px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
+.crew-edit-row select.ce-role{background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);padding:7px 26px 7px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
 .crew-edit-row select.ce-role:focus{border-color:var(--saw);outline:none}
-.add-crew-row select.ac-role{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
+.add-crew-row select.ac-role{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px 26px 8px 8px;font-size:12.5px;font-family:var(--body);min-width:0;width:100%}
 .add-crew-row select.ac-role:focus{border-color:var(--saw);outline:none}
 .crew-edit-row{display:grid;grid-template-columns:1fr 68px 24px;grid-template-areas:"name name del" "role hrs hrs";gap:6px 7px;align-items:center;padding:8px 9px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius)}
 .crew-edit-row .ce-name{grid-area:name;font-weight:600}
@@ -556,7 +726,16 @@ body.col-resizing *{cursor:col-resize!important}
 .crew-edit-row input:focus{border-color:var(--saw);outline:none}
 .ce-num{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:8px;text-transform:uppercase;color:var(--text-dim);white-space:nowrap}
 .ce-num input{width:100%;text-align:center}
-.add-crew-row{display:grid;grid-template-columns:1fr 1fr auto auto;gap:7px;align-items:stretch}
+/* Four columns (name, role, hrs, button) never fit the settings card, which is
+   about 270px wide: it left ~57px each for the name input and the role select, so
+   "Name…" rendered as "Nam" and the select's native arrow sat on top of its own
+   text. Name now takes a full row of its own and the rest share the second row —
+   the same two-row shape .crew-edit-row already uses. */
+.add-crew-row{display:grid;grid-template-columns:1fr auto auto;grid-template-areas:"name name name" "role hrs btn";gap:7px;align-items:stretch}
+.add-crew-row .ac-name{grid-area:name}
+.add-crew-row .ac-role{grid-area:role}
+.add-crew-row .cap-field{grid-area:hrs}
+.add-crew-row .btn{grid-area:btn}
 .add-crew-row>input{width:100%}
 .add-crew-row .cap-field{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;text-transform:uppercase;color:var(--text-muted);border:1px solid var(--line-strong);border-radius:var(--radius);padding:0 8px;background:var(--surface-2)}
 .add-crew-row .cap-field input{width:38px;border:none;background:transparent;padding:8px 0;font-size:13px;font-family:var(--body)}
@@ -698,6 +877,9 @@ body.col-resizing *{cursor:col-resize!important}
   body.printing .hours-grid-wrap,
   body.printing .g-wrap,
   body.printing .g-scroll{max-height:none !important;height:auto !important;overflow:visible !important;border:none !important;border-radius:0 !important}
+  /* Print at full size — the on-screen 80% default would otherwise shrink the
+     printed output as well, on top of the browser's own print scaling. */
+  #ganttRoot,#hoursRoot{zoom:1 !important}
 
   /* --- Build Hours grid --- */
   body.printing-hours .hours-grid{font-size:7.5pt;border-collapse:collapse;width:100% !important;table-layout:auto}
@@ -714,6 +896,7 @@ body.col-resizing *{cursor:col-resize!important}
   body.printing-hours .hours-grid .bh-sub{display:block;font-size:5.5pt;color:#555 !important}
   body.printing-hours .hours-grid .bh-input{border:none !important;background:transparent !important;font-size:7.5pt;width:100%;text-align:center;padding:0;color:#000 !important;-webkit-appearance:none;appearance:none}
   body.printing-hours .bh-totals-row td{font-weight:700;border-top:1pt solid #000 !important;background:#ececec !important}
+  body.printing-hours .bh-avg-row td{font-weight:600;background:#f4f4f4 !important;color:#000 !important}
   body.printing-hours .bh-alt td{background:#f6f6f6 !important}
   body.printing-hours .bh-status-pill{border:none !important;background:transparent !important;color:#000 !important;padding:0;font-size:6.5pt}
 
@@ -869,12 +1052,12 @@ body.readonly #adminPeopleRoot{display:none !important}
    is why top:0 had nothing to stick to. Giving the chart its own viewport makes
    it behave like a spreadsheet: header frozen on top, labels frozen at left
    (.g-label already handles that axis). */
-.g-scroll{overflow:auto;max-height:calc(100vh - 300px);min-height:300px}
+.g-scroll{overflow:auto;max-height:calc((100vh - 300px) / var(--tab-zoom));min-height:calc(300px / var(--tab-zoom))}
 .g-head{position:sticky;top:0;z-index:7;background:var(--card)}
 .g-head .ticks{background:var(--card)}
 
 @media (max-width:900px){
-  .g-scroll{max-height:calc(100vh - 260px);min-height:260px}
+  .g-scroll{max-height:calc((100vh - 260px) / var(--tab-zoom));min-height:calc(260px / var(--tab-zoom))}
 }
 
 /* Printing lays the whole chart out flat, so nothing should be pinned. */
