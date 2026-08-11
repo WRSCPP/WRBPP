@@ -12,6 +12,16 @@ const ALLOWED = [
   '.tab', '.modal-tab',
   '#exportBuildHours', '#exportBtn',
   '.auth-box', '[data-auth]', '.auth-overlay', '.auth-modal',
+  // DISMISS CONTROLS. These were missing, and the effect was the bug viewers
+  // actually reported: the build panel's ✕ is a <button>, so lockField disabled it,
+  // and a disabled button dispatches no click at all — so the handler bound to
+  // #buildOverlay never fired and the panel could not be closed with the ✕. The bay
+  // picker was worse: its ✕ and Cancel were both dead and it has no Escape handler,
+  // leaving a backdrop click as the only way out.
+  //
+  // Closing a dialog is not an edit. Anything that only dismisses belongs here.
+  '[data-close-build]', '[data-close-picker]', '[data-cancel-draft]',
+  '[data-close-modal]', '.modal-close',
 ].join(',');
 
 // Input types where readOnly does nothing and disabled is the only option.
@@ -46,6 +56,10 @@ function sweep(root = document) {
   // if an earlier pass locked them before they were recognised as auth controls.
   document.querySelectorAll('.auth-box button, .auth-box input, [data-auth], .auth-overlay button, .auth-overlay input')
     .forEach((el) => { el.disabled = false; el.readOnly = false; el.removeAttribute('data-locked'); el.tabIndex = 0; });
+  // Same treatment for dismiss controls: a viewer must always be able to get out of
+  // a dialog, even if an earlier pass locked the button before it was recognised.
+  document.querySelectorAll('[data-close-build], [data-close-picker], [data-cancel-draft], [data-close-modal], .modal-close')
+    .forEach((el) => { el.disabled = false; el.removeAttribute('data-locked'); el.tabIndex = 0; });
 }
 
 // The stylesheet hides the Settings tab for read-only sessions, but an access
@@ -80,7 +94,24 @@ export function enableReadOnly() {
   document.addEventListener('click', (e) => {
     const t = e.target;
     if (t.closest(ALLOWED)) return;
-    if (t.closest('[data-del-line],[data-del-stage],[data-del-opt],[data-del-crew],[data-crew-remove],[data-insp],[data-attach-remove],[data-insp-photo-remove],#newBuildBtn,.add-row,.rm')) {
+    // Edit-intent controls that are not <input>/<button> and so are never disabled
+    // by lockField. This list is a deny-list and deny-lists rot: every feature added
+    // since it was written had to be remembered, and several were not. The
+    // repository-level write guard in app.js is the real backstop — this pass exists
+    // to stop a viewer being shown a dialog that cannot do anything.
+    const EDIT_INTENT = [
+      '[data-del-line]', '[data-del-stage]', '[data-del-opt]', '[data-del-crew]',
+      '[data-crew-remove]', '[data-insp]', '[data-attach-remove]', '[data-insp-photo-remove]',
+      '#newBuildBtn', '.add-row', '.rm',
+      '[data-delete-build]',            // modal footer delete
+      '[data-place-build]',             // bay picker: place a build here
+      '[data-shop-bay]',                // shop overview: clicking a bay opens the picker
+      '[data-bay-drop]', '[data-bay-build]', '[data-bay-from]',
+      '[data-routing-stage]', '[data-moveready-stage]', '[data-routing-seed]',
+      '[data-stop-foam]', '[data-stop-trailer]', '[data-stop-field]',
+      '[data-bay-toggle]', '[data-highlight-row]',
+    ].join(',');
+    if (t.closest(EDIT_INTENT)) {
       e.preventDefault();
       e.stopPropagation();
     }
