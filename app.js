@@ -159,8 +159,6 @@ const state = {
   modalTab: 'details',
   routingLine: 'long', // which line the Line Routing card is showing
   ganttMode: 'plan',   // 'plan' = duration forecast (default), 'line' = pulse simulation
-  printSize: 'ledger', // 11x17 landscape by default; 'letter' for the smaller sheet
-  printScope: 'all',   // 'all' = whole timeline, axis compressed to fit; 'visible' = the window on screen
   // `today` is defined as a live getter immediately below — see localToday().
 };
 
@@ -900,7 +898,10 @@ function renderGantt(opts = {}) {
     }
   }
   // Geometry the print path needs to clip the timeline to a legible window.
-  state._gantt = { start, DAY, LABEL, chartW, totalDays, printScope: state.printScope };
+  // rowCount drives the printed row height: the sheet has a fixed height, so the only
+  // way to fit everything on one page is to know how many rows there are.
+  const rowCount = (rows.match(/class="g-row/g) || []).length;
+  state._gantt = { start, DAY, LABEL, chartW, totalDays, rowCount };
   const todayX = LABEL + diffLocal(start, state.today) * DAY;
 
   $('#ganttRoot').innerHTML = `
@@ -915,14 +916,7 @@ function renderGantt(opts = {}) {
         <button class="g-mode-btn${state.ganttMode === 'plan' ? ' active' : ''}" data-gantt-mode="plan" title="Dates from each build's own stage durations. This is the original forecast.">Plan</button>
         <button class="g-mode-btn${state.ganttMode === 'line' ? ' active' : ''}" data-gantt-mode="line" title="Walks both lines forward pulse by pulse: bay sequence, builds blocked behind slower ones, and contention for the single spray foam booth.">Line simulation</button>
       </span>
-      <span class="print-pick" title="What to print. Whole range compresses the time axis so everything fits at full-size type; Visible prints only the window on screen, larger.">
-        <button class="print-pick-btn${(state.printScope || 'all') === 'all' ? ' active' : ''}" data-print-scope="all">Whole range</button>
-        <button class="print-pick-btn${state.printScope === 'visible' ? ' active' : ''}" data-print-scope="visible">Visible</button>
-      </span>
-      <span class="print-pick" title="Sheet size. 11x17 landscape fits noticeably more of the timeline at full size.">
-        ${Object.entries(PRINT_PAPERS).map(([k, v]) => `<button class="print-pick-btn${state.printSize === k ? ' active' : ''}" data-print-size="${k}">${v.label}</button>`).join('')}
-      </span>
-      <button class="btn sm" data-print="gantt" title="Prints exactly the window you are looking at, at the largest scale that fits the sheet.">Print</button>
+      <button class="btn sm" data-print="gantt" title="Print the whole timeline on 11x17 landscape">Print</button>
     </div>
     ${ganttModeNote(fc)}
     <div class="g-wrap"><div class="g-scroll">
@@ -1758,25 +1752,43 @@ let summaryRowObserver = null;
 // simply prints smaller than it could — it still fits, which is the safe failure.
 const PRINT_MARGIN_IN = 0.35;
 
+// 11x17 landscape. "ledger" is the CSS keyword; "tabloid" is not one.
+const PRINT_PAPER = { css: 'ledger', widthIn: 17, heightIn: 11 };
+const printableWidthPx = () => Math.floor((PRINT_PAPER.widthIn - PRINT_MARGIN_IN * 2) * 96);
+const printableHeightPx = () => Math.floor((PRINT_PAPER.heightIn - PRINT_MARGIN_IN * 2) * 96);
+
 let restorePrintScroll = null;
 let ganttPrintRerendered = false;
 
-// Day width that fits the WHOLE range on the chosen sheet at scale 1.00, so type
-// prints at full size instead of being scaled into illegibility. Floored so an
-// enormous range does not collapse the bars to nothing — past that floor the chart
-// scales as before, which is the graceful failure.
-const GANTT_PRINT_MIN_DAY = 2.5;
+// ----------------------------- Gantt printing -----------------------------
+// Approach, after two that did not work:
+//
+//   1. transform: scale() on the chart. A transform does not affect layout, so the
+//      parent had to be given a fixed pixel height to match — and any error in that
+//      height clipped the bottom. Worse, a transformed element that overflows a page
+//      is CLIPPED rather than paginated, so anything past the first sheet was lost.
+//   2. Measuring the on-screen scroll window and scaling that. Same clipping, plus it
+//      shrank the type: the full range at 16px/day needs scale 0.32, which turns 11px
+//      text into 3.5px.
+//
+// This one uses NO transform and NO fixed heights. The chart is re-rendered with a day
+// width chosen so its natural width fits the printable area, then print CSS releases
+// every scroll container to its natural size. Nothing is scaled, so nothing can be
+// mis-measured, and rows paginate normally across sheets with break-inside:avoid
+// keeping a row off a page boundary.
+const GANTT_PRINT_MIN_DAY = 1.6;
+
+// Day width whose natural chart width fits the printable area.
 function ganttPrintDay() {
   const g = state._gantt;
-  if (!g || (state.printScope || 'all') !== 'all') return null;
-  const usable = printPageWidthPx() - g.LABEL;
-  if (!(g.totalDays > 0) || usable <= 0) return null;
+  if (!g || !(g.totalDays > 0)) return null;
+  const usable = printableWidthPx() - g.LABEL;
+  if (usable <= 0) return null;
   const fitted = usable / g.totalDays;
-  if (fitted >= 16) return null;                       // already fits; leave it alone
+  if (fitted >= 16) return null;                 // already fits at screen size
   return Math.max(GANTT_PRINT_MIN_DAY, Math.floor(fitted * 100) / 100);
 }
 
-// Swap the Gantt to print geometry, print, then swap back.
 function prepareGanttForPrint() {
   if (state.tab !== 'gantt' || ganttPrintRerendered) return;
   const day = ganttPrintDay();
@@ -1790,135 +1802,83 @@ function restoreGanttAfterPrint() {
   renderGantt();
 }
 
-
-// Printing the whole timeline is unreadable: at 16px/day a 290-day range is
-// ~4,900px, which scales to 0.20 on letter — 10px type becomes 2px. Legibility
-// needs a scale of roughly 0.6 or better, so the print clips to a forward window
-// instead of compressing everything.
-//
-// 13 weeks (91 days) = 91*16 + 234 label = 1,690px:
-//     letter landscape   989px page -> scale 0.59
-//     tabloid landscape 1565px page -> scale 0.93
-// One window that reads on both papers, which matters because the DOM is built
-// before the print dialog opens, so the chosen paper isn't knowable.
-const PRINT_WEEKS_BACK = 1;
-const PRINT_WEEKS_FORWARD = 12;
-
-// Paper is now CHOSEN rather than guessed. The previous approach emitted a scale for
-// letter and another for tabloid, selected by a print media query, because the DOM is
-// built before the dialog opens so the paper was unknowable. Naming the size in
-// @page removes the guess: the dialog opens on the right paper and there is exactly
-// one scale to compute. 11x17 is "ledger" in CSS, not "tabloid".
-const PRINT_PAPERS = {
-  ledger: { css: 'ledger', label: '11x17', widthIn: 17 },
-  letter: { css: 'letter', label: 'Letter', widthIn: 11 },
-};
-const printPaper = () => PRINT_PAPERS[state.printSize] || PRINT_PAPERS.ledger;
-const printPageWidthPx = () => (printPaper().widthIn - PRINT_MARGIN_IN * 2) * 96;
-
 function ganttPrintCss() {
   const g = state._gantt;
   const inner = $('#ganttRoot .g-inner');
   const scroller = $('#ganttRoot .g-scroll');
   if (!g || !inner || !scroller) return '';
 
-  const { start, DAY, LABEL, chartW } = g;
-
-  // Print the window that is ACTUALLY ON SCREEN, taken from the horizontal scroll
-  // position, rather than a fixed 13 weeks from today. The label column is
-  // position:sticky so it does not consume scroll, which makes the mapping direct:
-  // scrollLeft is the first visible day, and the visible track is the scroller's
-  // width less the label column.
-  //
-  // Reading clientWidth (layout pixels) rather than getBoundingClientRect (visually
-  // scaled) matters here because #ganttRoot carries a CSS zoom — the same trap that
-  // broke the Build Hours sticky offset.
-  //
-  // A floor of MIN weeks stops a narrow window printing a near-empty sheet.
-  const MIN_PRINT_DAYS = 7 * 4;
-  const wholeRange = (state.printScope || 'all') === 'all';
-  const visibleTrackPx = Math.max(0, scroller.clientWidth - LABEL);
-  let winDays = wholeRange
-    ? Math.round(chartW / DAY)
-    : Math.max(MIN_PRINT_DAYS, Math.round(visibleTrackPx / DAY));
-  winDays = Math.min(winDays, Math.round(chartW / DAY));
-
-  let offsetDays = wholeRange ? 0 : Math.max(0, Math.round(scroller.scrollLeft / DAY));
-  const maxOffset = Math.max(0, Math.round(chartW / DAY) - winDays);
-  offsetDays = Math.min(offsetDays, maxOffset);
-  // Remember the printed window so the "outside this window" note matches it.
-  state._ganttPrintWindow = {
-    from: addDaysLocal(start, offsetDays),
-    to: addDaysLocal(start, offsetDays + winDays - 1),
-  };
-  const offsetPx = offsetDays * DAY;
-  const windowPx = Math.min(chartW, winDays * DAY);
-  const totalW = LABEL + windowPx;
-
+  // Scroll position is irrelevant now that the whole range is printed, but it still
+  // has to be reset or the sticky label column paints offset.
   const prevLeft = scroller.scrollLeft, prevTop = scroller.scrollTop;
   scroller.scrollLeft = 0; scroller.scrollTop = 0;
   restorePrintScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
 
-  // offsetHeight, NOT getBoundingClientRect().height. #ganttRoot carries a CSS zoom of
-  // 0.8, and getBoundingClientRect returns VISUALLY SCALED pixels — it reported 778px
-  // for content that is 969px tall. Print resets the zoom to 1, so .g-scroll was sized
-  // to 778px with overflow:hidden and clipped roughly three rows off the bottom.
-  // offsetHeight is layout pixels and zoom-invariant.
-  const h = inner.offsetHeight;
-  const pageW = printPageWidthPx();
-  const scale = Math.max(0.1, Math.min(1, pageW / totalW));
-  const a = { scale, w: Math.ceil(totalW * scale), h: Math.ceil(h * scale) };
+  const natural = g.LABEL + g.chartW;
 
-  // Shift the timeline left by the window offset and clip each row to the
-  // narrowed width. The label column is a separate flex child, so it stays put.
-  const shift = `
-    #ganttRoot .g-head .ticks,
-    #ganttRoot .g-gridlines,
-    #ganttRoot .g-row .g-track,
-    #ganttRoot .today{transform:translateX(-${offsetPx}px) !important}
-    #ganttRoot .g-inner{width:${totalW}px !important}
-    #ganttRoot .g-head,
-    #ganttRoot .g-row,
-    #ganttRoot .g-body{overflow:hidden !important}`;
+  // Row height that puts every row on one sheet. The paper height is fixed, so this is
+  // the only lever — page 2 of a Gantt has no date header above it, which makes the
+  // bars on it unreadable, so fitting one sheet matters more than roomy rows.
+  //
+  // Below TIGHT_ROW there is not enough height for a two-line build name, so the name
+  // clamps to one line. Below MIN_ROW nothing legible is left and it paginates instead.
+  // Height budget per row, measured rather than guessed:
+  //   two-line name  12px x 1.2 x 2 = 29px
+  //   meta line      11px           = 11px
+  //   padding                       = 14px   -> 54px for the full treatment
+  //   one-line name + meta                   -> 35px
+  //   one-line name only                     -> 24px
+  const HEAD_H = 34, MIN_ROW = 24, ROOM_FULL = 54, ROOM_ONE_LINE = 35;
+  // Each row also carries a 1px bottom border, which is not part of --g-row-h. Left
+  // out of the budget, 30 rows overflowed onto a second sheet by ~5px — a whole extra
+  // page for a sliver.
+  const avail = printableHeightPx() - HEAD_H - g.rowCount;
+  const fitRow = g.rowCount > 0 ? Math.floor(avail / g.rowCount) : 56;
+  const rowH = Math.min(56, Math.max(MIN_ROW, fitRow));
+  const onePage = g.rowCount > 0 && HEAD_H + rowH * g.rowCount <= printableHeightPx();
+  // Graduated rather than a single cliff: at 47px there is room for one line of name
+  // AND the line/date meta, and dropping the meta there would throw away useful
+  // context for no reason. Only below 35px does the meta have to go.
+  const oneLineName = rowH < ROOM_FULL;
+  const hideMeta = rowH < ROOM_ONE_LINE;
+  const barH = Math.max(10, Math.min(26, rowH - 16));
 
   return `@media print{
-    ${shift}
-    #ganttRoot .g-wrap{width:auto !important;overflow:visible !important}
-    #ganttRoot .g-scroll{width:${a.w}px !important;height:${a.h}px !important;
-      max-height:none !important;min-height:0 !important;overflow:hidden !important}
-    #ganttRoot .g-inner{transform:scale(${a.scale});transform-origin:top left}
+    /* Fit the rows to the sheet: --g-row-h drives the label, the track and the bar's
+       vertical centring, so overriding it here keeps all three in step. */
+    #ganttRoot{--g-row-h:${rowH}px;--g-bar-h:${barH}px}
+    ${oneLineName ? '#ganttRoot .g-name{-webkit-line-clamp:1 !important}' : ''}
+    ${hideMeta ? '#ganttRoot .g-meta{display:none !important}' : ''}
+    #ganttRoot .g-row:not(.group) .g-label{padding:4px 10px !important}
+    ${onePage ? '' : '/* too many rows to fit one sheet — paginating on row boundaries */'}
+    /* Release every scroll container: no fixed sizes, no hidden overflow, nothing to
+       clip against. This is what the previous versions got wrong. */
+    #ganttRoot{zoom:1 !important;overflow:visible !important}
+    #ganttRoot .g-wrap{width:auto !important;height:auto !important;overflow:visible !important}
+    #ganttRoot .g-scroll{width:auto !important;height:auto !important;
+      max-height:none !important;min-height:0 !important;overflow:visible !important}
+    #ganttRoot .g-inner{width:${natural}px !important;transform:none !important}
+    #ganttRoot .g-head,#ganttRoot .g-row,#ganttRoot .g-body{overflow:visible !important}
+
+    /* Sticky breaks across printed pages — the label would repeat at the wrong
+       offset. Static keeps each row intact. */
+    #ganttRoot .g-label,#ganttRoot .g-label-sp{position:static !important}
+
+    /* Paginate on row boundaries rather than through the middle of one, and repeat
+       the date header on each sheet. */
+    #ganttRoot .g-row{break-inside:avoid !important;page-break-inside:avoid !important}
+    #ganttRoot .g-head{break-after:avoid !important}
   }`;
 }
 
 /**
- * A print-only line naming builds that fall outside the printed window, so the
- * long-range view is preserved as a note rather than 200 illegible columns.
+ * The whole rendered range now prints, so nothing falls outside the printed window and
+ * the "starts after" note this used to emit has no subject. Kept as a no-op that also
+ * clears any note left over from an earlier print.
  */
 function ganttPrintNote() {
-  const g = state._gantt;
-  if (!g) return;
-  // Match the window that was actually printed, which now follows the screen rather
-  // than a fixed forward horizon.
-  const win = state._ganttPrintWindow;
-  const cutoff = win ? win.to : addDaysLocal(state.today, 7 * PRINT_WEEKS_FORWARD);
-  const proj = projections();
-  const later = filteredBuilds()
-    .filter((b) => b.status !== 'complete')
-    .map((b) => ({ b, p: proj[b.id] }))
-    .filter((x) => x.p && x.p.start > cutoff)
-    .sort((x, y) => (x.p.start < y.p.start ? -1 : 1));
-
-  let el = document.getElementById('ganttPrintNote');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'ganttPrintNote';
-    el.className = 'g-print-note';
-    $('#ganttRoot')?.appendChild(el);
-  }
-  el.innerHTML = later.length
-    ? `<b>Starts after ${fmtDate(cutoff)}:</b> ` +
-      later.map((x) => `${esc(x.b.name)} (${fmtShort(x.p.start)})`).join(' \u00b7 ')
-    : '';
+  const el = document.getElementById('ganttPrintNote');
+  if (el) el.innerHTML = '';
 }
 
 /**
@@ -1948,7 +1908,7 @@ function preparePrint() {
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
-  style.textContent = `@page{size:${printPaper().css} landscape;margin:${PRINT_MARGIN_IN}in}\n` + extra;
+  style.textContent = `@page{size:${PRINT_PAPER.css} landscape;margin:${PRINT_MARGIN_IN}in}\n` + extra;
 
   document.body.classList.add('printing', `printing-${kind}`);
 }
@@ -3236,10 +3196,6 @@ function wireGlobalEvents() {
   // The Print button is a convenience only — it opens the browser's own dialog.
   // beforeprint does the preparation, so Ctrl+P and the File menu behave identically.
   document.addEventListener('click', (e) => {
-    const sizeBtn = e.target.closest('[data-print-size]');
-    if (sizeBtn) { state.printSize = sizeBtn.dataset.printSize; render(); return; }
-    const scopeBtn = e.target.closest('[data-print-scope]');
-    if (scopeBtn) { state.printScope = scopeBtn.dataset.printScope; render(); return; }
     if (e.target.closest('[data-print]')) window.print();
   });
   window.addEventListener('beforeprint', preparePrint);
