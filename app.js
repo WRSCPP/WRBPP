@@ -160,6 +160,7 @@ const state = {
   routingLine: 'long', // which line the Line Routing card is showing
   ganttMode: 'plan',   // 'plan' = duration forecast (default), 'line' = pulse simulation
   printSize: 'ledger', // 11x17 landscape by default; 'letter' for the smaller sheet
+  printScope: 'all',   // 'all' = whole timeline, axis compressed to fit; 'visible' = the window on screen
   // `today` is defined as a live getter immediately below — see localToday().
 };
 
@@ -797,8 +798,16 @@ function runScenario(buildId, date) {
 }
 
 // ----------------------------- Gantt -----------------------------
-function renderGantt() {
-  const DAY = 16, LABEL = 234, HORIZON = 182; // ~26 weeks visible
+function renderGantt(opts = {}) {
+  // DAY is overridable so the print path can COMPRESS THE TIME AXIS rather than
+  // scale the whole chart down. Scaling shrinks the type with everything else — the
+  // full range at 16px/day needs scale 0.32, which turns 11px text into 3.5px. At
+  // ~4.6px/day the same range fits the sheet at scale 1.00 with type at full size.
+  const DAY = Number(opts.day) || 16;
+  const LABEL = 234, HORIZON = 182; // ~26 weeks visible on screen
+  // Week gridlines stay every 7 days, but a DATE LABEL needs roughly 34px of room or
+  // they collide, so labels thin out as the axis compresses.
+  const tickStep = Math.max(7, Math.ceil(34 / Math.max(1, DAY * 7)) * 7);
   const proj = projections();
   // The Gantt is a forward-looking schedule: show active + pipeline work, not
   // completed builds (those live in Reports). This keeps the timeline centered
@@ -834,7 +843,8 @@ function renderGantt() {
   let ticks = '';
   let gridlines = '';
   for (let i = 0; i < totalDays; i += 7) {
-    ticks += `<div class="tick" style="left:${i * DAY}px"><span>${fmtShort(addDaysLocal(start, i))}</span></div>`;
+    const labelled = i % tickStep === 0;
+    ticks += `<div class="tick" style="left:${i * DAY}px">${labelled ? `<span>${fmtShort(addDaysLocal(start, i))}</span>` : ''}</div>`;
     // A real DOM gridline per week, drawn once across the full body height —
     // reliable at any width, unlike a CSS repeating-gradient which browsers
     // stop painting past a size limit.
@@ -890,7 +900,7 @@ function renderGantt() {
     }
   }
   // Geometry the print path needs to clip the timeline to a legible window.
-  state._gantt = { start, DAY, LABEL, chartW, totalDays };
+  state._gantt = { start, DAY, LABEL, chartW, totalDays, printScope: state.printScope };
   const todayX = LABEL + diffLocal(start, state.today) * DAY;
 
   $('#ganttRoot').innerHTML = `
@@ -904,6 +914,10 @@ function renderGantt() {
       <span class="g-mode">
         <button class="g-mode-btn${state.ganttMode === 'plan' ? ' active' : ''}" data-gantt-mode="plan" title="Dates from each build's own stage durations. This is the original forecast.">Plan</button>
         <button class="g-mode-btn${state.ganttMode === 'line' ? ' active' : ''}" data-gantt-mode="line" title="Walks both lines forward pulse by pulse: bay sequence, builds blocked behind slower ones, and contention for the single spray foam booth.">Line simulation</button>
+      </span>
+      <span class="print-pick" title="What to print. Whole range compresses the time axis so everything fits at full-size type; Visible prints only the window on screen, larger.">
+        <button class="print-pick-btn${(state.printScope || 'all') === 'all' ? ' active' : ''}" data-print-scope="all">Whole range</button>
+        <button class="print-pick-btn${state.printScope === 'visible' ? ' active' : ''}" data-print-scope="visible">Visible</button>
       </span>
       <span class="print-pick" title="Sheet size. 11x17 landscape fits noticeably more of the timeline at full size.">
         ${Object.entries(PRINT_PAPERS).map(([k, v]) => `<button class="print-pick-btn${state.printSize === k ? ' active' : ''}" data-print-size="${k}">${v.label}</button>`).join('')}
@@ -1745,6 +1759,37 @@ let summaryRowObserver = null;
 const PRINT_MARGIN_IN = 0.35;
 
 let restorePrintScroll = null;
+let ganttPrintRerendered = false;
+
+// Day width that fits the WHOLE range on the chosen sheet at scale 1.00, so type
+// prints at full size instead of being scaled into illegibility. Floored so an
+// enormous range does not collapse the bars to nothing — past that floor the chart
+// scales as before, which is the graceful failure.
+const GANTT_PRINT_MIN_DAY = 2.5;
+function ganttPrintDay() {
+  const g = state._gantt;
+  if (!g || (state.printScope || 'all') !== 'all') return null;
+  const usable = printPageWidthPx() - g.LABEL;
+  if (!(g.totalDays > 0) || usable <= 0) return null;
+  const fitted = usable / g.totalDays;
+  if (fitted >= 16) return null;                       // already fits; leave it alone
+  return Math.max(GANTT_PRINT_MIN_DAY, Math.floor(fitted * 100) / 100);
+}
+
+// Swap the Gantt to print geometry, print, then swap back.
+function prepareGanttForPrint() {
+  if (state.tab !== 'gantt' || ganttPrintRerendered) return;
+  const day = ganttPrintDay();
+  if (!day) return;
+  ganttPrintRerendered = true;
+  renderGantt({ day });
+}
+function restoreGanttAfterPrint() {
+  if (!ganttPrintRerendered) return;
+  ganttPrintRerendered = false;
+  renderGantt();
+}
+
 
 // Printing the whole timeline is unreadable: at 16px/day a 290-day range is
 // ~4,900px, which scales to 0.20 on letter — 10px type becomes 2px. Legibility
@@ -1791,11 +1836,14 @@ function ganttPrintCss() {
   //
   // A floor of MIN weeks stops a narrow window printing a near-empty sheet.
   const MIN_PRINT_DAYS = 7 * 4;
+  const wholeRange = (state.printScope || 'all') === 'all';
   const visibleTrackPx = Math.max(0, scroller.clientWidth - LABEL);
-  let winDays = Math.max(MIN_PRINT_DAYS, Math.round(visibleTrackPx / DAY));
+  let winDays = wholeRange
+    ? Math.round(chartW / DAY)
+    : Math.max(MIN_PRINT_DAYS, Math.round(visibleTrackPx / DAY));
   winDays = Math.min(winDays, Math.round(chartW / DAY));
 
-  let offsetDays = Math.max(0, Math.round(scroller.scrollLeft / DAY));
+  let offsetDays = wholeRange ? 0 : Math.max(0, Math.round(scroller.scrollLeft / DAY));
   const maxOffset = Math.max(0, Math.round(chartW / DAY) - winDays);
   offsetDays = Math.min(offsetDays, maxOffset);
   // Remember the printed window so the "outside this window" note matches it.
@@ -1811,7 +1859,12 @@ function ganttPrintCss() {
   scroller.scrollLeft = 0; scroller.scrollTop = 0;
   restorePrintScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
 
-  const h = inner.getBoundingClientRect().height;
+  // offsetHeight, NOT getBoundingClientRect().height. #ganttRoot carries a CSS zoom of
+  // 0.8, and getBoundingClientRect returns VISUALLY SCALED pixels — it reported 778px
+  // for content that is 969px tall. Print resets the zoom to 1, so .g-scroll was sized
+  // to 778px with overflow:hidden and clipped roughly three rows off the bottom.
+  // offsetHeight is layout pixels and zoom-invariant.
+  const h = inner.offsetHeight;
   const pageW = printPageWidthPx();
   const scale = Math.max(0.1, Math.min(1, pageW / totalW));
   const a = { scale, w: Math.ceil(totalW * scale), h: Math.ceil(h * scale) };
@@ -1881,8 +1934,17 @@ function preparePrint() {
   // Only the Gantt needs measured scaling. Build Hours reflows as a table, and
   // the shop map is already width:100% with a fixed aspect ratio, so print CSS
   // alone makes it fill the page.
+  //
+  // ORDER MATTERS: the axis has to be re-rendered at print width BEFORE the CSS is
+  // measured, because ganttPrintCss reads state._gantt. Doing this from a separate
+  // beforeprint listener happened to work only because of registration order, which
+  // is not a property worth depending on.
   let extra = '';
-  if (kind === 'gantt') { extra = ganttPrintCss(); ganttPrintNote(); }
+  if (kind === 'gantt') {
+    prepareGanttForPrint();
+    extra = ganttPrintCss();
+    ganttPrintNote();
+  }
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
@@ -1892,6 +1954,8 @@ function preparePrint() {
 }
 
 function cleanupPrint() {
+  // Put the on-screen axis back; prepareGanttForPrint compressed it for the sheet.
+  restoreGanttAfterPrint();
   document.body.classList.remove('printing', 'printing-hours', 'printing-gantt', 'printing-shop');
   if (restorePrintScroll) { restorePrintScroll(); restorePrintScroll = null; }
 }
@@ -3174,6 +3238,8 @@ function wireGlobalEvents() {
   document.addEventListener('click', (e) => {
     const sizeBtn = e.target.closest('[data-print-size]');
     if (sizeBtn) { state.printSize = sizeBtn.dataset.printSize; render(); return; }
+    const scopeBtn = e.target.closest('[data-print-scope]');
+    if (scopeBtn) { state.printScope = scopeBtn.dataset.printScope; render(); return; }
     if (e.target.closest('[data-print]')) window.print();
   });
   window.addEventListener('beforeprint', preparePrint);
