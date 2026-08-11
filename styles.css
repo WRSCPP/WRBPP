@@ -108,6 +108,56 @@ main{padding:22px 26px 64px}
 .status-pill{display:inline-block;font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;border:1px solid;border-radius:20px;padding:2px 9px;font-weight:600}
 
 .g-legend{display:flex;gap:18px;margin-bottom:13px;flex-wrap:wrap}
+/* Duplicate control in the build panel footer. Sits with the destructive action but
+   reads as neutral, and keeps its count input adjacent so the number is obviously
+   attached to the button. */
+.dup-group{display:inline-flex;align-items:center;gap:8px;margin-left:auto}
+.dup-group label{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:8.5px;
+  text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim)}
+.dup-group input{width:52px;text-align:center;background:var(--card);border:1px solid var(--line-strong);
+  border-radius:var(--radius);padding:5px 6px;font-family:var(--mono);font-size:12px}
+
+/* Sheet-size picker next to Print. Same shape as the view-mode toggle. */
+.print-pick{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius);overflow:hidden}
+.print-pick-btn{background:var(--card);border:0;padding:5px 10px;font-family:var(--mono);font-size:8.5px;
+  text-transform:uppercase;letter-spacing:.04em;font-weight:700;color:var(--text-muted);cursor:pointer}
+.print-pick-btn + .print-pick-btn{border-left:1px solid var(--line-strong)}
+.print-pick-btn:hover{background:var(--surface-2)}
+.print-pick-btn.active{background:var(--saw);color:#fff}
+
+/* Gantt view mode toggle: Plan (duration forecast) vs Line simulation. */
+.g-mode{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius);overflow:hidden;margin-left:auto}
+.g-mode-btn{background:var(--card);border:0;padding:5px 11px;font-family:var(--mono);font-size:8.5px;
+  text-transform:uppercase;letter-spacing:.04em;font-weight:700;color:var(--text-muted);cursor:pointer}
+.g-mode-btn + .g-mode-btn{border-left:1px solid var(--line-strong)}
+.g-mode-btn:hover{background:var(--surface-2)}
+.g-mode-btn.active{background:var(--timber);color:#fff}
+
+/* The planned dates, drawn as a thin baseline strip UNDER the simulated bar rather
+   than behind it. Behind was the first attempt and it is invisible: same height, an
+   opaque bar on top, and the simulation almost always runs longer than the plan — so
+   the ghost was completely hidden in exactly the case it exists to show. A baseline
+   below the bar is the standard convention and makes plan-vs-actual a direct
+   left-to-right length comparison. */
+.g-bar-ghost{position:absolute;top:calc((var(--g-row-h) + var(--g-bar-h)) / 2 + 3px);height:4px;
+  border:1px dashed var(--line-strong);border-radius:2px;background:transparent;pointer-events:none;z-index:0}
+.g-legend .lg i.ghost{border:1px dashed var(--line-strong);background:transparent;height:4px}
+.g-legend .lg i.blk{background:var(--clay);border-radius:50%;width:8px;height:8px}
+
+/* A pulse where this build was held: behind a slower build, or queued for the booth.
+   Sits clear ABOVE the bar — centred on it, these markers landed on top of the build
+   name and were unreadable. */
+.g-block{position:absolute;top:calc((var(--g-row-h) - var(--g-bar-h)) / 2 - 9px);width:7px;height:7px;
+  border-radius:50%;background:var(--amber);border:1px solid var(--card);z-index:3;pointer-events:auto}
+.g-block.booth{background:var(--clay)}
+
+/* Mode explanation strip. */
+.g-note{margin:0 0 10px;padding:8px 12px;border-left:3px solid var(--timber);background:var(--surface-2);
+  border-radius:var(--radius);font-size:11.5px;color:var(--text-muted);line-height:1.55}
+.g-note.warn{border-left-color:var(--amber);background:color-mix(in srgb,var(--amber) 8%,var(--card))}
+.g-note strong{color:var(--ink)}
+.g-note-warn{color:var(--clay);font-weight:600}
+
 .g-legend .lg{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--text-muted);text-transform:uppercase}
 .g-legend i{width:12px;height:12px;border-radius:2px;display:inline-block}
 .g-legend i.tent{border:1.5px dashed var(--text-muted)} .g-legend i.tgt{width:0;height:12px;border-left:2px dashed var(--ink);border-radius:0}
@@ -358,6 +408,17 @@ html,body{max-width:100%;overflow-x:hidden}
 .lr-tab{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--radius);padding:6px 11px;font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);cursor:pointer;font-weight:700}
 .lr-tab:hover{border-color:var(--timber)}
 .lr-tab.active{background:var(--timber);border-color:var(--timber);color:#fff}
+/* Line-level route stops: where foam happens, and whether the line has a trailer
+   pre-station. Sits between the line tabs and the stage table because it frames how
+   the rest of the card is read. */
+.lr-stops{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin:0 0 12px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2)}
+.lr-stops label{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted)}
+.lr-stops select{background:var(--card);border:1px solid var(--line-strong);border-radius:var(--radius);
+  padding:5px 26px 5px 8px;font-size:12px;font-family:var(--body)}
+.lr-stop-check input{width:14px;height:14px;margin:0;cursor:pointer}
+.lr-stops .lr-note{flex:1 0 100%;margin:2px 0 0}
+
 .lr-warn{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--amber);background:color-mix(in srgb,var(--amber) 8%,var(--card));font-size:11.5px;color:var(--text-muted);border-radius:var(--radius)}
 .lr-split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.2fr);gap:16px;align-items:start}
 @media (max-width:900px){.lr-split{grid-template-columns:1fr}}
@@ -475,6 +536,20 @@ html,body{max-width:100%;overflow-x:hidden}
 .shop-bay.spray-foam .shop-bay-num{color:var(--timber);font-size:9px}
 .shop-bay.spray-foam.occupied .shop-bay-num{color:#fff}
 .shop-bay.spray-foam .shop-bay-open{font-size:7px}
+
+/* Carried (traveled) work marker. A build sitting in a bay with unfinished work
+   from earlier bays is behind, and that is invisible from position alone — two
+   builds in the same bay can be a fortnight apart. The badge shows how many stages
+   are outstanding and roughly how many hours; the full list is in the tooltip.
+   'gated' means at least one of them was flagged move-ready, i.e. a gate was
+   waived to let the build through. */
+.shop-carry{position:absolute;top:2px;right:2px;padding:1px 4px;border-radius:3px;
+  background:var(--amber);color:#2A2622;font-family:var(--mono);font-size:8px;font-weight:700;
+  letter-spacing:.02em;line-height:1.4;pointer-events:none}
+.shop-bay.gated .shop-carry{background:var(--clay);color:#fff}
+.shop-bay.behind{box-shadow:inset 0 0 0 2px var(--amber)}
+.shop-bay.gated{box-shadow:inset 0 0 0 2px var(--clay)}
+.shop-bay.compact .shop-carry{font-size:7px;padding:0 3px;top:1px;right:1px}
 
 /* A line divides into lanes when any of its bays holds more than one build, so
    every cell in that row gets shorter. Shrink the type and drop the secondary
@@ -948,6 +1023,16 @@ body.readonly .tab[data-tab="settings"],
 body.readonly .settings-actions,
 body.readonly .scenario-actions,
 body.readonly .bh-highlight-btn{display:none !important}
+
+/* Dismiss controls stay fully usable in a read-only session. The generic
+   `[data-locked]` styling below strips borders and backgrounds from locked fields;
+   without this, a close button that slipped through would render as invisible
+   furniture. Closing a dialog is not an edit. */
+body.readonly [data-close-build],
+body.readonly [data-close-picker],
+body.readonly [data-cancel-draft],
+body.readonly [data-close-modal],
+body.readonly .modal-close{display:inline-flex !important;opacity:1 !important;cursor:pointer !important;pointer-events:auto !important}
 
 /* Inputs stay visible (they carry the data) but read flat, not editable. */
 body.readonly input[data-locked],

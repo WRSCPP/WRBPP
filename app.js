@@ -15,12 +15,49 @@ import {
 } from './engine.js';
 import {
   bayPlan, seedMapping, standardBayHours, bayHours, bayCapacity,
-  achievableTakt, stageRouting,
+  achievableTakt, stageRouting, traveledWork, dwellPulses, simulateShop,
 } from './takt.js';
 import { buildReport } from './analytics.js';
 import { SEED_BUILDS, SEED_LINES, SEED_STAGES, SEED_SETTINGS } from './seed.js';
 
-const repo = new Repository();
+const _repo = new Repository();
+
+// Every mutating repository method is wrapped so a read-only session cannot write,
+// regardless of which call site is reached.
+//
+// Before this there was exactly ONE `if (!CAN_WRITE) return;` guard, inside
+// patchBuild, while 25 other call sites wrote directly — creating builds, deleting
+// builds, saving settings, importing a backup. The reasoning in that one guard
+// ("UI locking is cosmetic and can be bypassed") applies to all of them equally; it
+// had just never been carried across. Guarding the boundary means it cannot rot as
+// features are added, which is exactly how the gap opened in the first place.
+//
+// Reads pass straight through. Writes resolve to null so callers that await them
+// still work, and log once so a genuine permissions problem is diagnosable rather
+// than silent.
+const MUTATORS = new Set([
+  'saveBuild', 'deleteBuild', 'saveLine', 'deleteLine',
+  'saveStage', 'deleteStage', 'saveSettings', 'seed', 'importAll',
+]);
+let _warnedReadOnly = false;
+const repo = new Proxy(_repo, {
+  get(target, prop, receiver) {
+    const value = Reflect.get(target, prop, receiver);
+    if (typeof value !== 'function' || !MUTATORS.has(prop)) {
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+    return (...args) => {
+      if (!CAN_WRITE) {
+        if (!_warnedReadOnly) {
+          _warnedReadOnly = true;
+          console.warn(`[Traveler] read-only session: ${String(prop)} and other writes are blocked.`);
+        }
+        return Promise.resolve(null);
+      }
+      return value.apply(target, args);
+    };
+  },
+});
 
 // Whether this session may write.
 //
@@ -109,7 +146,6 @@ function makeSettingsCollapsible() {
 // events — set briefly during rapid in-modal edits (e.g. logging stage hours) so
 // the DOM stays authoritative and edits aren't clobbered by the async refresh.
 let suppressModalRerenderUntil = 0;
-let suppressHoursRerenderUntil = 0;
 
 const state = {
   tab: 'dashboard',
@@ -122,6 +158,8 @@ const state = {
   openBuildId: null,
   modalTab: 'details',
   routingLine: 'long', // which line the Line Routing card is showing
+  ganttMode: 'plan',   // 'plan' = duration forecast (default), 'line' = pulse simulation
+  printSize: 'ledger', // 11x17 landscape by default; 'letter' for the smaller sheet
   // `today` is defined as a live getter immediately below — see localToday().
 };
 
@@ -223,13 +261,16 @@ async function boot() {
   const onDataChange = async () => {
     await refresh();
     if (renderQueued) return;
+    _stdStageHoursCache = null;
+    _shopForecastCache = null;
     renderQueued = true;
     queueMicrotask(() => {
       renderQueued = false;
-      // Skip the full re-render while actively editing the Build Hours grid, so
-      // tabbing between cells doesn't rebuild the DOM and lose focus. The edited
-      // row updates its own totals live via updateHoursRowLive.
-      if (state.tab === 'hours' && Date.now() < suppressHoursRerenderUntil) return;
+      // The Build Hours grid must never be rebuilt under the user's cursor. This
+      // used to be a 600ms timer, which is racy by construction: a save slower than
+      // the window (an ordinary occurrence against a remote database) lands after it
+      // expires and destroys focus mid-tab. Decide on the actual focus instead.
+      if (state.tab === 'hours' && hoursGridHasFocus()) { updateHoursSummaryRows(); return; }
       render();
       // Skip the modal rebuild briefly after an in-modal edit so rapid successive
       // field/stage edits aren't reset by the async save→refresh cycle (the modal
@@ -237,6 +278,7 @@ async function boot() {
       if (state.openBuildId && Date.now() >= suppressModalRerenderUntil) renderBuildModalPreservingFocus();
     });
   };
+  // Standard stage hours are derived from completed builds; invalidate on any change.
   ['builds:changed', 'lines:changed', 'stages:changed', 'settings:changed', 'seeded']
     .forEach((e) => repo.addEventListener(e, onDataChange));
 
@@ -401,6 +443,50 @@ function baySharedNote(build) {
   if (!others.length) return '';
   const overlap = [...new Set(others.flatMap((o) => bayList(o).filter((v) => mine.includes(v))))];
   return `<div class="bay-shared">Sharing ${esc(overlap.map(bayDisplayName).join(', '))} with ${others.map((o) => esc(o.name || 'another build')).join(', ')}.</div>`;
+}
+
+// Optional route stops for one build. Spray foam and the trailer are per-build
+// decisions made case by case, not properties of a module type — a build either
+// needs foam this time or it does not.
+//
+// Only offered when the line actually has that stop configured (see Line Routing),
+// so a build cannot be flagged for a booth visit on a line with no foam position
+// set, which would then be silently ignored by the forecast.
+function stopToggles(build) {
+  const line = state.lines.find((l) => l.id === build.lineId);
+  const def = SHOP_LINES.find((d) => line && d.match.some((m) =>
+    (line.name || '').toLowerCase().includes(m) || line.id.toLowerCase().includes(m)));
+  const stops = lineStops(def ? def.key : null);
+  const opts = [];
+  if (stops.foamPosition) {
+    opts.push({ field: 'needsFoam', label: 'Spray foam', note: `Bay ${stops.foamPosition}` });
+  }
+  if (stops.trailer) {
+    opts.push({ field: 'needsTrailer', label: 'Trailer', note: 'before Bay 1' });
+  }
+  if (!opts.length) {
+    return `<span class="bay-pick-hint">No optional stops configured for this line \u2014 set them in Settings \u2192 Line Routing.</span>`;
+  }
+  return `<div class="bay-pick">
+    ${opts.map((o) => `<label class="bay-pick-opt ${build[o.field] ? 'on' : ''}">
+      <input type="checkbox" data-stop-field="${o.field}" ${build[o.field] ? 'checked' : ''}>
+      <span>${esc(o.label)} <em class="hint">${esc(o.note)}</em></span></label>`).join('')}
+  </div>`;
+}
+
+// Where a line's optional stops sit. Defaults come from reading the shop's paper
+// Build Schedule: the INS (insulation / spray foam) divider falls between L4 and L3
+// and between S3 and S2, and builds run Bay 1 upward, so foam happens as a build
+// leaves Bay 3 on the Long Line and Bay 2 on the Short Line. Those are a starting
+// point, not gospel \u2014 they are editable in the Line Routing card.
+const LINE_STOP_DEFAULTS = {
+  long: { foamPosition: 3, trailer: false },
+  short: { foamPosition: 2, trailer: true },
+};
+function lineStops(key) {
+  if (!key) return { foamPosition: 0, trailer: false };
+  const saved = (state.settings.lineStops || {})[key];
+  return { ...(LINE_STOP_DEFAULTS[key] || { foamPosition: 0, trailer: false }), ...(saved || {}) };
 }
 
 // Bay pickers are multi-select now: a build can be ticked into several bays.
@@ -721,9 +807,14 @@ function renderGantt() {
   const starts = builds.map((b) => proj[b.id]?.start).filter(Boolean);
   // Consider both projected ship dates AND explicitly assigned target-ship dates,
   // so the chart always extends through the farthest/latest date on the board.
+  // In line mode the simulation can push completions past the planned dates, so the
+  // horizon has to account for both or the last bars fall off the right edge.
+  const fc = state.ganttMode === 'line' ? shopForecast() : false;
+  const simEnds = fc ? sim_completions(fc, builds) : [];
   const ends = [
     ...builds.map((b) => proj[b.id]?.projectedShip).filter(Boolean),
     ...builds.map((b) => b.targetShip).filter(Boolean),
+    ...simEnds,
   ];
   // Anchor the window to the earliest of (today, any build start), minus a small margin,
   // so the calendar always reads as a real timeline even when nothing is scheduled yet.
@@ -759,13 +850,37 @@ function renderGantt() {
     for (const b of items) {
       const p = proj[b.id];
       const f = forecastBuild(b, state.stages, calendar(), state.today);
-      const x = diffLocal(start, p.start) * DAY;
-      const w = Math.max(DAY, (diffLocal(p.start, p.projectedShip) + 1) * DAY);
       const color = f.risk === 'late' ? 'var(--rust)' : f.risk === 'at-risk' ? 'var(--amber)' : (health['on-track']?.color || 'var(--teal)');
       const tent = !b.confirmedStart;
-      rows += `<div class="g-row"><div class="g-label" data-open="${b.id}" title="${esc(b.name)}"><span class="g-name">${esc(b.name)}</span><span class="g-meta">${esc(lineName(b.lineId))} · ${fmtShort(p.start)}→${fmtShort(p.projectedShip)}</span></div>
+
+      // Line mode replaces the planned bar with the simulated one where a result
+      // exists, and keeps the planned bar as a faint ghost so the difference between
+      // "what we planned" and "what the line will actually do" is readable rather
+      // than something you have to switch back and forth to see.
+      const r = fc && fc.byId.get(b.id);
+      const simStart = r && r.timeline.length ? r.timeline[0].date : null;
+      const simEnd = r ? r.completedDate : null;
+      const useSim = !!(fc && simStart && simEnd);
+
+      const planX = diffLocal(start, p.start) * DAY;
+      const planW = Math.max(DAY, (diffLocal(p.start, p.projectedShip) + 1) * DAY);
+      const x = useSim ? diffLocal(start, simStart) * DAY : planX;
+      const w = useSim ? Math.max(DAY, (diffLocal(simStart, simEnd) + 1) * DAY) : planW;
+
+      const slipDays = useSim ? diffLocal(p.projectedShip, simEnd) : 0;
+      const metaRange = useSim ? `${fmtShort(simStart)}→${fmtShort(simEnd)}` : `${fmtShort(p.start)}→${fmtShort(p.projectedShip)}`;
+      const slipNote = useSim && slipDays > 0 ? ` · +${slipDays}d vs plan` : '';
+
+      // Pulses this build spent held: behind a slower build, or queued for the booth.
+      const held = fc ? fc.sim.blocks.filter((k) => k.build.id === b.id) : [];
+      const boothHeld = held.filter((k) => k.reason === 'booth').length;
+      const marks = useSim ? held.map((k) => `<span class="g-block ${k.reason === 'booth' ? 'booth' : ''}" style="left:${diffLocal(start, k.date) * DAY}px" title="${k.reason === 'booth' ? 'Waiting for the spray foam booth' : `Blocked behind ${esc(k.blockedBy ? k.blockedBy.name : 'the build ahead')}`} — ${fmtDate(k.date)}"></span>`).join('') : '';
+
+      rows += `<div class="g-row"><div class="g-label" data-open="${b.id}" title="${esc(b.name)}"><span class="g-name">${esc(b.name)}</span><span class="g-meta">${esc(lineName(b.lineId))} · ${metaRange}${slipNote}</span></div>
         <div class="g-track" style="width:${chartW}px">
-          <div class="g-bar ${tent ? 'tentative' : ''}" style="left:${x}px;width:${w}px;${tent ? '' : `background:${color}`}" data-open="${b.id}" title="${esc(b.name)} — ${riskMeta(f.risk).label}">${esc(b.name)}</div>
+          ${useSim ? `<div class="g-bar-ghost" style="left:${planX}px;width:${planW}px" title="Planned: ${fmtShort(p.start)}→${fmtShort(p.projectedShip)}"></div>` : ''}
+          <div class="g-bar ${tent ? 'tentative' : ''}" style="left:${x}px;width:${w}px;${tent ? '' : `background:${color}`}" data-open="${b.id}" title="${esc(b.name)} — ${riskMeta(f.risk).label}${useSim ? `\nSimulated ship ${fmtDate(simEnd)}${slipDays > 0 ? ` (${slipDays} days later than planned)` : ''}${held.length ? `\nHeld ${held.length} pulse(s)${boothHeld ? `, ${boothHeld} of them waiting for the booth` : ''}` : ''}` : ''}">${esc(b.name)}</div>
+          ${marks}
           ${b.targetShip ? `<div class="g-target" style="left:${diffLocal(start, b.targetShip) * DAY}px" title="Target ship: ${fmtDate(b.targetShip)}"><span class="g-target-flag"></span></div>` : ''}
         </div></div>`;
     }
@@ -785,8 +900,17 @@ function renderGantt() {
       <span class="lg"><i style="background:var(--rust)"></i>Late</span>
       <span class="lg"><i class="tent"></i>Tentative</span>
       <span class="lg"><i class="tgt"></i>Target ship</span>
-      <button class="btn sm" data-print="gantt">Print</button>
+      ${state.ganttMode === 'line' ? '<span class="lg"><i class="ghost"></i>Planned</span><span class="lg"><i class="blk"></i>Held</span>' : ''}
+      <span class="g-mode">
+        <button class="g-mode-btn${state.ganttMode === 'plan' ? ' active' : ''}" data-gantt-mode="plan" title="Dates from each build's own stage durations. This is the original forecast.">Plan</button>
+        <button class="g-mode-btn${state.ganttMode === 'line' ? ' active' : ''}" data-gantt-mode="line" title="Walks both lines forward pulse by pulse: bay sequence, builds blocked behind slower ones, and contention for the single spray foam booth.">Line simulation</button>
+      </span>
+      <span class="print-pick" title="Sheet size. 11x17 landscape fits noticeably more of the timeline at full size.">
+        ${Object.entries(PRINT_PAPERS).map(([k, v]) => `<button class="print-pick-btn${state.printSize === k ? ' active' : ''}" data-print-size="${k}">${v.label}</button>`).join('')}
+      </span>
+      <button class="btn sm" data-print="gantt" title="Prints exactly the window you are looking at, at the largest scale that fits the sheet.">Print</button>
     </div>
+    ${ganttModeNote(fc)}
     <div class="g-wrap"><div class="g-scroll">
       <div class="g-inner" style="width:${LABEL + chartW}px">
         <div class="g-head"><div class="g-label-sp">Build</div><div class="ticks" style="width:${chartW}px">${ticks}</div></div>
@@ -891,6 +1015,271 @@ function resolveShopLine(def, usedIds) {
 // bay and any one-off bays (Trailer) the line owns. Folding the extras in here
 // rather than rendering them separately means lane allocation sees every cell, so
 // a shared bay divides consistently across the whole row.
+// A stage counts as done when its progress slider reads 100%. Note that builds also
+// carry a `stageStatus` field in the seed shape, but nothing in the app ever writes
+// or reads it — stageProgress is the real signal.
+const stageLabelOf = (id) => (state.stages.find((x) => String(x.id) === String(id)) || {}).label || String(id);
+const stageIsComplete = (build, stageId) => (Number(build?.stageProgress?.[stageId]) || 0) >= 1;
+
+// Typical hours for a stage, averaged over completed builds that logged any. Used
+// to put a size on outstanding work; averaging only over builds that touched the
+// stage avoids builds that never reached it dragging the figure to zero.
+let _stdStageHoursCache = null;
+function standardStageHours() {
+  if (_stdStageHoursCache) return _stdStageHoursCache;
+  const out = {};
+  const refs = state.builds.filter((b) => b.status === 'complete');
+  for (const st of state.stages) {
+    let total = 0, n = 0;
+    for (const b of refs) {
+      const h = Number(b.stageHours?.[st.id]) || 0;
+      if (h > 0) { total += h; n += 1; }
+    }
+    out[st.id] = n ? total / n : 0;
+  }
+  _stdStageHoursCache = out;
+  return out;
+}
+
+// Work a build is carrying into its current bay: stages whose planned bay is at or
+// behind it that are not finished. Remaining hours are the stage standard scaled by
+// how much is left, so a half-finished stage counts half rather than all or nothing.
+// Returns null when the line has no routing configured, so the UI can stay silent
+// rather than implying a clean sheet it has not actually checked.
+function carriedWorkFor(build, def, position) {
+  const mapping = (state.settings.lineRouting || {})[def.key];
+  if (!mapping || !Object.values(mapping).some((a) => (a || []).length)) return null;
+  const bayIds = Array.from({ length: def.bays }, (_, i) => i + 1);
+  const bays = bayPlan(bayIds, mapping);
+  const routing = stageRouting(bays, state.settings.moveReadyStages || []);
+  const std = standardStageHours();
+  const hoursOf = (b, stageId) => {
+    const remainingFraction = 1 - Math.min(1, Number(b?.stageProgress?.[stageId]) || 0);
+    return (std[stageId] || 0) * remainingFraction;
+  };
+  return traveledWork(build, position, routing, hoursOf, stageIsComplete);
+}
+
+// Explains what the current Gantt mode is showing, and why the simulation is not
+// available when it is not. Silence here would read as "the simulation says
+// everything is fine", which is the one thing it must never imply.
+function ganttModeNote(fc) {
+  if (state.ganttMode !== 'line') return '';
+  if (!fc) {
+    return `<div class="g-note warn">Line simulation needs a bay-to-stage mapping before it can say anything useful \u2014 without one every bay has zero work content and every dwell collapses to a single pulse. Set it up in <strong>Settings \u2192 Line Routing</strong>. Showing the duration-based plan until then.</div>`;
+  }
+  const s2 = fc.sim;
+  const blocked = s2.blocks.filter((b) => b.reason === 'blocked').length;
+  const booth = s2.blocks.filter((b) => b.reason === 'booth').length;
+  const entry = s2.blocks.filter((b) => b.reason === 'entry' || b.reason === 'trailer-busy').length;
+  const worst = {};
+  for (const b of s2.blocks) worst[b.build.name] = (worst[b.build.name] || 0) + 1;
+  const top = Object.entries(worst).sort((a, b) => b[1] - a[1])[0];
+  return `<div class="g-note">
+    Pulse = <strong>${fc.pulseDays} workdays</strong>. Booth goes to ${fc.policy === 'waiting' ? 'whoever has waited longest' : 'the nearest target ship date'}.
+    ${s2.blocks.length
+      ? `<strong>${s2.blocks.length}</strong> held pulse${s2.blocks.length === 1 ? '' : 's'}: ${blocked} behind a slower build, ${booth} queued for the booth${entry ? `, ${entry} waiting to get on the line` : ''}.${top ? ` Worst affected: <strong>${esc(top[0])}</strong> (${top[1]}).` : ''}`
+      : 'No build is held by another this horizon.'}
+    ${s2.hitPulseLimit ? ' <span class="g-note-warn">Simulation hit its pulse limit \u2014 some builds have no completion date, usually a bay with work but no crew matched to it.</span>' : ''}
+  </div>`;
+}
+
+// Simulated completion dates for the builds on screen, used to size the Gantt window.
+function sim_completions(fc, builds) {
+  const out = [];
+  for (const b of builds) {
+    const r = fc.byId.get(b.id);
+    if (r && r.completedDate) out.push(r.completedDate);
+  }
+  return out;
+}
+
+// ----------------------------- Duplicating builds -----------------------------
+/**
+ * Copy a build N times, for a customer ordering several identical units.
+ *
+ * What carries over is the SPECIFICATION; what does not is anything describing
+ * progress or physical position. Getting that split wrong is the whole risk here —
+ * a duplicate that inherits logged hours would corrupt the historical averages the
+ * forecast is built on, and one that inherits a bay would put two builds in the same
+ * place.
+ *
+ *   copied   name (suffixed), client, moduleType, lineId, targetShip, priority,
+ *            notes, stageDurations, projectedHours, materials, route stops
+ *   reset    id, bay/bays, stageHours, stageProgress, stageActuals, stageCrew,
+ *            inspectionStatus, hoursUpdatedAt, actualStart, actualShip,
+ *            confirmedStart, attachments
+ *
+ * Status drops to 'pipeline' regardless of the original: a copy has not been
+ * scheduled, let alone started. Attachments are deliberately not copied — they are
+ * signed-storage references, and duplicating the pointers would leave several builds
+ * sharing files that one of them could delete.
+ */
+function duplicateSpec(source, index, total) {
+  const base = (source.name || 'Untitled').trim();
+  // "(2 of 4)" reads unambiguously and sorts predictably. An existing suffix from a
+  // previous duplication is stripped so copies of copies do not accumulate them.
+  const stem = base.replace(/\s*\(\d+\s+of\s+\d+\)\s*$/i, '');
+  const name = total > 1 ? `${stem} (${index} of ${total})` : `${stem} (copy)`;
+  return {
+    id: `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}-${index}`,
+    name,
+    client: source.client || '',
+    moduleType: source.moduleType || '',
+    lineId: source.lineId || null,
+    status: 'pipeline',
+    priority: Number(source.priority) || 100,
+    notes: source.notes || '',
+    targetShip: source.targetShip || null,
+    tentativeStart: source.tentativeStart || null,
+    stageDurations: { ...(source.stageDurations || {}) },
+    projectedHours: Number(source.projectedHours) || 0,
+    materials: Array.isArray(source.materials) ? source.materials.map((m) => ({ ...m })) : [],
+    needsFoam: !!source.needsFoam,
+    needsTrailer: !!source.needsTrailer,
+    // Explicitly cleared rather than omitted, so a duplicate can never inherit
+    // progress from a partially-populated source record.
+    bays: [], bay: null,
+    confirmedStart: null, actualStart: null, actualShip: null,
+    stageProgress: {}, stageHours: {}, stageActuals: {}, stageCrew: {},
+    inspectionStatus: {}, hoursUpdatedAt: null, attachments: {},
+  };
+}
+
+async function duplicateBuild(sourceId, count) {
+  const source = state.builds.find((b) => b.id === sourceId);
+  if (!source) return [];
+  const n = Math.max(1, Math.min(50, Math.round(Number(count) || 1)));
+  const made = [];
+  for (let i = 1; i <= n; i++) {
+    // Saved one at a time and awaited: the store emits a change event per write, and
+    // firing dozens in parallel would have the UI re-render mid-flight.
+    const copy = duplicateSpec(source, i, n);
+    await repo.saveBuild(copy, actor());
+    made.push(copy);
+  }
+  return made;
+}
+
+// ----------------------------- Line simulation bridge -----------------------------
+// Assembles everything simulateShop needs from settings, then walks both lines
+// forward. Returns null when the shop is not configured for it, so the Gantt can
+// fall back to the duration-based forecast rather than replacing a working estimate
+// with a worse one built on missing data.
+//
+// Requires a Line Routing mapping for at least one line. Without it every bay has
+// zero work content, every dwell collapses to one pulse, and the "simulation" would
+// just be a bay count dressed up as a forecast.
+let _shopForecastCache = null;
+function shopForecast() {
+  if (_shopForecastCache !== null) return _shopForecastCache;
+  const routingAll = state.settings.lineRouting || {};
+  const configured = SHOP_LINES.some((d) => {
+    const m = routingAll[d.key];
+    return m && Object.values(m).some((a) => (a || []).length);
+  });
+  if (!configured) { _shopForecastCache = false; return false; }
+
+  // One pulse for the whole shop: the line moves together, with exceptions. Defaults
+  // to the shortest line week (4 here), i.e. a weekly move.
+  const weeks = state.lines.map((l) => Number(l.workdaysPerWeek)).filter((n) => n >= 1);
+  const pulseDays = Number(state.settings.pulseDays) || (weeks.length ? Math.min(...weeks) : 5);
+  const workdaysPerWeek = weeks.length ? Math.min(...weeks) : 5;
+
+  const usedIds = new Set();
+  const lines = [];
+  const perLine = new Map();
+  for (const def of SHOP_LINES) {
+    const line = resolveShopLine(def, usedIds);
+    if (!line) continue;
+    usedIds.add(line.id);
+    const bayIds = Array.from({ length: def.bays }, (_, i) => i + 1);
+    // Numbered bays only, in production sequence. simulateShop indexes bays by
+    // position, so the Spray Foam and Trailer cells that shopCells() adds for the
+    // floor plan must NOT be in here — foam is a resource held during a bay, and the
+    // trailer is a pre-station, both handled by their own flags.
+    const bays = bayPlan(bayIds, routingAll[def.key] || {});
+    const stops = lineStops(def.key);
+    const std = standardBayHours(bays, state.builds.filter((b) => b.status === 'complete'),
+      (b, sid) => Number(b.stageHours?.[sid]) || 0);
+    const coverage = crewStageCoverage();
+    const stageLabel = new Map(state.stages.map((st) => [String(st.id), (st.label || '').toLowerCase()]));
+    const capOf = (bay) => {
+      const set = new Set(bay.stages.map(String));
+      let hours = 0;
+      for (const p of state.settings.people || []) {
+        const seen = coverage.get(p.id);
+        const role = (p.role || '').toLowerCase().trim();
+        const byHistory = seen && [...seen].some((sid) => set.has(sid));
+        const byName = role && bay.stages.some((sid) => {
+          const label = stageLabel.get(String(sid)) || '';
+          return label.includes(role) || role.includes(label);
+        });
+        if (byHistory || byName) hours += Number(p.weeklyHours) || 0;
+      }
+      return hours;
+    };
+    perLine.set(def.key, { def, line, bays, std, capOf, routing: stageRouting(bays, state.settings.moveReadyStages || []) });
+    lines.push({ key: def.key, bays, foamPosition: stops.foamPosition || 0, trailer: !!stops.trailer });
+  }
+  if (!lines.length) { _shopForecastCache = false; return false; }
+
+  const lineKeyOf = (build) => {
+    for (const [key, v] of perLine) if (v.line.id === build.lineId) return key;
+    return null;
+  };
+  const positionOf = (build) => {
+    const nums = bayList(build).map(Number).filter((n) => Number.isFinite(n));
+    return nums.length ? Math.max(...nums) : 0; // front of the run; 0 = not on the line
+  };
+
+  const builds = state.builds
+    .filter((b) => b.status === 'active' || b.status === 'confirmed')
+    .map((b) => {
+      const key = lineKeyOf(b);
+      if (!key) return null;
+      return {
+        id: b.id, name: b.name, line: key, position: positionOf(b),
+        needsFoam: !!b.needsFoam, needsTrailer: !!b.needsTrailer,
+        due: b.targetShip || '9999-12-31', _build: b,
+      };
+    })
+    .filter(Boolean);
+  if (!builds.length) { _shopForecastCache = false; return false; }
+
+  // Dwell = (this bay's standard work + any backlog carried in) / capacity per pulse.
+  // Carried work is charged to the build's CURRENT bay only, so it is absorbed once
+  // rather than re-counted at every remaining bay.
+  const dwellFor = (simBuild, bay) => {
+    const v = perLine.get(simBuild.line);
+    if (!v) return 1;
+    let hours = Number(v.std[bay.id]) || 0;
+    if (bay.position === positionOf(simBuild._build)) {
+      const tw = carriedWorkFor(simBuild._build, v.def, bay.position);
+      if (tw) hours += tw.hours;
+    }
+    const d = dwellPulses(hours, v.capOf(bay), pulseDays, workdaysPerWeek);
+    return Number.isFinite(d) ? d : 1; // a starved bay must not stall the whole forecast
+  };
+
+  // Whoever is closest to their target ship date gets the booth. The alternative,
+  // longest-waiting, is fairer between lines but ignores urgency — and because ties
+  // break deterministically it means the Long Line systematically wins and the Short
+  // Line systematically absorbs the delay.
+  const policy = state.settings.boothPriority || 'due';
+  const boothPriority = policy === 'waiting'
+    ? (a, b) => (b.boothWait - a.boothWait) || String(a.build.id).localeCompare(String(b.build.id))
+    : (a, b) => String(a.build.due).localeCompare(String(b.build.due))
+        || (b.boothWait - a.boothWait) || String(a.build.id).localeCompare(String(b.build.id));
+
+  const sim = simulateShop({
+    lines, builds, start: state.today, dwellFor, boothPriority,
+    advanceDate: (iso, n) => addWorkdays(iso, n * pulseDays, calendar()),
+  });
+  _shopForecastCache = { sim, pulseDays, policy, byId: new Map(sim.builds.map((r) => [r.build.id, r])) };
+  return _shopForecastCache;
+}
+
 // Which stages each person has actually worked, aggregated from every build's
 // stageCrew assignment. Used to infer bay capacity without inventing a setting.
 function crewStageCoverage() {
@@ -1054,7 +1443,7 @@ function renderBuildHours() {
     // Strictly the last time hours were edited in THIS tab (not any other edit).
     const updated = b.hoursUpdatedAt;
     return `<tr class="${idx % 2 ? 'bh-alt' : ''}">
-      <td class="bh-name bh-name-var ${tone}" style="${wStyle('name')}" data-open-build="${b.id}" title="Open ${esc(b.name || 'Untitled')}"><div class="bh-name-inner"><button class="bh-highlight-btn" data-highlight-row="${b.id}" title="Highlight this row">★</button><span class="bh-name-text">${esc(b.name || 'Untitled')}<span class="bh-sub">${esc(b.moduleType || '')}</span></span></div></td>
+      <td class="bh-name bh-name-var ${tone}" style="${wStyle('name')}" data-open-build="${b.id}" title="Open ${esc(b.name || 'Untitled')}"><div class="bh-name-inner"><button class="bh-highlight-btn" tabindex="-1" data-highlight-row="${b.id}" title="Highlight this row">★</button><span class="bh-name-text">${esc(b.name || 'Untitled')}<span class="bh-sub">${esc(b.moduleType || '')}</span></span></div></td>
       ${cells}
       <td class="bh-total">${actual || 0}</td>
       <td class="bh-goal"><input class="bh-input bh-goal-input" type="number" min="0" step="1" value="${goal || ''}" data-goal-build="${b.id}" title="Projected (goal) hours" placeholder="—"></td>
@@ -1139,7 +1528,6 @@ function renderBuildHours() {
       if (!b) return;
       const stageHours = { ...(b.stageHours || {}), [inp.dataset.hoursStage]: Number(inp.value) || 0 };
       suppressModalRerenderUntil = Date.now() + 300;
-      suppressHoursRerenderUntil = Date.now() + 600; // keep the grid stable so tabbing works
       await patchBuild(inp.dataset.hoursBuild, { stageHours, hoursUpdatedAt: new Date().toISOString() });
       updateHoursRowLive(inp);
     });
@@ -1147,7 +1535,6 @@ function renderBuildHours() {
   // Edit the goal (projected hours) inline.
   $$('#hoursRoot [data-goal-build]').forEach((inp) => {
     inp.addEventListener('change', async () => {
-      suppressHoursRerenderUntil = Date.now() + 600;
       await patchBuild(inp.dataset.goalBuild, { projectedHours: Number(inp.value) || 0, hoursUpdatedAt: new Date().toISOString() });
       updateHoursRowLive(inp);
     });
@@ -1156,6 +1543,20 @@ function renderBuildHours() {
   wireReorder('#hoursRoot');
   wireColumnResize();
   setSummaryRowOffset();
+}
+
+// True when the caret is inside an editable cell of the Build Hours grid.
+//
+// Tab order is the reason this has to be exact. Pressing Tab moves focus to the
+// next cell BEFORE the previous cell's change event fires, so by the time the save
+// resolves the user is already typing somewhere else. Rebuilding then throws the
+// caret out of a cell the user is actively in — which reads as "it lost my cursor"
+// or "it skipped a cell".
+function hoursGridHasFocus() {
+  const root = $('#hoursRoot');
+  const active = document.activeElement;
+  if (!root || !active || !root.contains(active)) return false;
+  return active.matches('[data-hours-build], [data-goal-build]');
 }
 
 // Drag the thin handle on a column header's right edge to resize that column.
@@ -1342,11 +1743,6 @@ let summaryRowObserver = null;
 // If a browser doesn't evaluate the query, the letter rule applies and the chart
 // simply prints smaller than it could — it still fits, which is the safe failure.
 const PRINT_MARGIN_IN = 0.35;
-const PAGE_PX = {
-  letter: (11 - PRINT_MARGIN_IN * 2) * 96,
-  tabloid: (17 - PRINT_MARGIN_IN * 2) * 96,
-};
-const TABLOID_MIN_PX = 1200;   // between the two widths above
 
 let restorePrintScroll = null;
 
@@ -1363,6 +1759,18 @@ let restorePrintScroll = null;
 const PRINT_WEEKS_BACK = 1;
 const PRINT_WEEKS_FORWARD = 12;
 
+// Paper is now CHOSEN rather than guessed. The previous approach emitted a scale for
+// letter and another for tabloid, selected by a print media query, because the DOM is
+// built before the dialog opens so the paper was unknowable. Naming the size in
+// @page removes the guess: the dialog opens on the right paper and there is exactly
+// one scale to compute. 11x17 is "ledger" in CSS, not "tabloid".
+const PRINT_PAPERS = {
+  ledger: { css: 'ledger', label: '11x17', widthIn: 17 },
+  letter: { css: 'letter', label: 'Letter', widthIn: 11 },
+};
+const printPaper = () => PRINT_PAPERS[state.printSize] || PRINT_PAPERS.ledger;
+const printPageWidthPx = () => (printPaper().widthIn - PRINT_MARGIN_IN * 2) * 96;
+
 function ganttPrintCss() {
   const g = state._gantt;
   const inner = $('#ganttRoot .g-inner');
@@ -1370,13 +1778,31 @@ function ganttPrintCss() {
   if (!g || !inner || !scroller) return '';
 
   const { start, DAY, LABEL, chartW } = g;
-  const winStart = addDaysLocal(state.today, -7 * PRINT_WEEKS_BACK);
-  const winDays = 7 * (PRINT_WEEKS_BACK + PRINT_WEEKS_FORWARD);
 
-  // Clamp so the window can't run off either end of the rendered chart.
-  let offsetDays = Math.max(0, diffLocal(start, winStart));
+  // Print the window that is ACTUALLY ON SCREEN, taken from the horizontal scroll
+  // position, rather than a fixed 13 weeks from today. The label column is
+  // position:sticky so it does not consume scroll, which makes the mapping direct:
+  // scrollLeft is the first visible day, and the visible track is the scroller's
+  // width less the label column.
+  //
+  // Reading clientWidth (layout pixels) rather than getBoundingClientRect (visually
+  // scaled) matters here because #ganttRoot carries a CSS zoom — the same trap that
+  // broke the Build Hours sticky offset.
+  //
+  // A floor of MIN weeks stops a narrow window printing a near-empty sheet.
+  const MIN_PRINT_DAYS = 7 * 4;
+  const visibleTrackPx = Math.max(0, scroller.clientWidth - LABEL);
+  let winDays = Math.max(MIN_PRINT_DAYS, Math.round(visibleTrackPx / DAY));
+  winDays = Math.min(winDays, Math.round(chartW / DAY));
+
+  let offsetDays = Math.max(0, Math.round(scroller.scrollLeft / DAY));
   const maxOffset = Math.max(0, Math.round(chartW / DAY) - winDays);
   offsetDays = Math.min(offsetDays, maxOffset);
+  // Remember the printed window so the "outside this window" note matches it.
+  state._ganttPrintWindow = {
+    from: addDaysLocal(start, offsetDays),
+    to: addDaysLocal(start, offsetDays + winDays - 1),
+  };
   const offsetPx = offsetDays * DAY;
   const windowPx = Math.min(chartW, winDays * DAY);
   const totalW = LABEL + windowPx;
@@ -1386,11 +1812,9 @@ function ganttPrintCss() {
   restorePrintScroll = () => { scroller.scrollLeft = prevLeft; scroller.scrollTop = prevTop; };
 
   const h = inner.getBoundingClientRect().height;
-  const box = (pageW) => {
-    const scale = Math.max(0.1, Math.min(1, pageW / totalW));
-    return { scale, w: Math.ceil(totalW * scale), h: Math.ceil(h * scale) };
-  };
-  const a = box(PAGE_PX.letter), b = box(PAGE_PX.tabloid);
+  const pageW = printPageWidthPx();
+  const scale = Math.max(0.1, Math.min(1, pageW / totalW));
+  const a = { scale, w: Math.ceil(totalW * scale), h: Math.ceil(h * scale) };
 
   // Shift the timeline left by the window offset and clip each row to the
   // narrowed width. The label column is a separate flex child, so it stays put.
@@ -1410,10 +1834,6 @@ function ganttPrintCss() {
     #ganttRoot .g-scroll{width:${a.w}px !important;height:${a.h}px !important;
       max-height:none !important;min-height:0 !important;overflow:hidden !important}
     #ganttRoot .g-inner{transform:scale(${a.scale});transform-origin:top left}
-  }
-  @media print and (min-width:${TABLOID_MIN_PX}px){
-    #ganttRoot .g-scroll{width:${b.w}px !important;height:${b.h}px !important}
-    #ganttRoot .g-inner{transform:scale(${b.scale})}
   }`;
 }
 
@@ -1424,7 +1844,10 @@ function ganttPrintCss() {
 function ganttPrintNote() {
   const g = state._gantt;
   if (!g) return;
-  const cutoff = addDaysLocal(state.today, 7 * PRINT_WEEKS_FORWARD);
+  // Match the window that was actually printed, which now follows the screen rather
+  // than a fixed forward horizon.
+  const win = state._ganttPrintWindow;
+  const cutoff = win ? win.to : addDaysLocal(state.today, 7 * PRINT_WEEKS_FORWARD);
   const proj = projections();
   const later = filteredBuilds()
     .filter((b) => b.status !== 'complete')
@@ -1463,7 +1886,7 @@ function preparePrint() {
 
   let style = document.getElementById('printPageRule');
   if (!style) { style = document.createElement('style'); style.id = 'printPageRule'; document.head.appendChild(style); }
-  style.textContent = `@page{size:landscape;margin:${PRINT_MARGIN_IN}in}\n` + extra;
+  style.textContent = `@page{size:${printPaper().css} landscape;margin:${PRINT_MARGIN_IN}in}\n` + extra;
 
   document.body.classList.add('printing', `printing-${kind}`);
 }
@@ -1553,14 +1976,30 @@ function renderShopOverview() {
       const color = riskMeta(f.risk).color;
       const runLabel = run.map((i) => cells[i].label).join('–');
       const spanNote = run.length > 1 ? `${run.length} bays` : '';
-      return `<div class="shop-bay occupied${compact} shop-build" draggable="true"
+
+      // Work this build should have finished further up the line. Only meaningful
+      // once the line has a routing configured; carriedWorkFor returns null
+      // otherwise so an unconfigured line shows nothing rather than a false all-clear.
+      const furthest = Math.max(...run.map((i) => (typeof cells[i].id === 'number' ? cells[i].id : 0)));
+      const carried = furthest > 0 ? carriedWorkFor(build, def, furthest) : null;
+      const behind = carried && carried.count > 0;
+      const carriedHrs = behind ? Math.round(carried.hours) : 0;
+      const carriedTip = behind
+        ? `\n\nCarrying ${carried.count} unfinished stage${carried.count === 1 ? '' : 's'} from earlier bays`
+          + (carriedHrs ? ` (~${carriedHrs}h)` : '') + ':\n'
+          + carried.stages.map((x) => `• ${esc(stageLabelOf(x.stageId))} — planned Bay ${x.plannedBay}${x.moveReady ? ' (gate)' : ''}`).join('\n')
+        : '';
+      const gated = behind && carried.stages.some((x) => x.moveReady);
+
+      return `<div class="shop-bay occupied${compact} shop-build${behind ? ' behind' : ''}${gated ? ' gated' : ''}" draggable="true"
         style="left:${first.left}%;top:${region.top + lane * laneH}%;width:${width}%;height:${laneH}%;--bay-color:${color}"
         data-shop-bay="${first.id}" data-shop-line="${line.id}" data-bay-drop="${first.id}"
         data-build="${build.id}" data-bay-build="${build.id}"
-        title="${esc(line.name)} · ${esc(bayListLabel(build))} · ${esc(build.name || 'Untitled')} — drag to move, hold Shift to add a bay">
+        title="${esc(line.name)} · ${esc(bayListLabel(build))} · ${esc(build.name || 'Untitled')} — drag to move, hold Shift to add a bay${carriedTip}">
         <span class="shop-bay-num">${runLabel}</span>
         <span class="shop-bay-build">${esc(build.name || 'Untitled')}</span>
         ${spanNote ? `<span class="shop-bay-open">${spanNote}</span>` : ''}
+        ${behind ? `<span class="shop-carry" title="Unfinished work from earlier bays">${carried.count}${carriedHrs ? ` · ${carriedHrs}h` : ''}</span>` : ''}
       </div>`;
     }).join('')).join('');
 
@@ -1660,6 +2099,10 @@ function renderShopOverview() {
 // When an empty bay is clicked, let the user drop an existing active/confirmed
 // build into it (or note there are none to place).
 function openBayPicker(lineId, bay) {
+  // Placing a build is an edit. A viewer clicking an empty bay used to get a modal
+  // listing every candidate build whose buttons were all disabled — a dead end that
+  // looks like a broken feature rather than a permission boundary.
+  if (!CAN_WRITE) return;
   const line = state.lines.find((l) => l.id === lineId);
   const lineTitle = line ? esc(line.name) : 'this line';
   const extra = SHOP_EXTRA_BAYS.find((x) => x.id === bay);
@@ -2124,6 +2567,7 @@ function renderSettings() {
   const routingCard = (() => {
     const def = SHOP_LINES.find((d) => d.key === state.routingLine) || SHOP_LINES[0];
     const bayIds = Array.from({ length: def.bays }, (_, i) => i + 1);
+    const stops = lineStops(def.key);
     const routingAll = state.settings.lineRouting || {};
     const mapping = routingAll[def.key] || {};
     const moveReady = new Set((state.settings.moveReadyStages || []).map(String));
@@ -2217,6 +2661,21 @@ function renderSettings() {
       <div class="lr-tabs">
         ${SHOP_LINES.map((d) => `<button class="lr-tab${d.key === def.key ? ' active' : ''}" data-routing-line="${d.key}">${esc(d.label)} · ${d.bays} bays</button>`).join('')}
         <button class="btn sm" data-routing-seed title="Distribute stages evenly as a starting point, then correct by hand">Distribute evenly</button>
+      </div>
+      <div class="lr-stops">
+        <label>Spray foam happens as a build leaves
+          <select data-stop-foam>
+            <option value="0"${!stops.foamPosition ? ' selected' : ''}>\u2014 this line has no foam stop \u2014</option>
+            ${bayIds.map((n) => `<option value="${n}"${Number(stops.foamPosition) === n ? ' selected' : ''}>Bay ${n}</option>`).join('')}
+          </select>
+        </label>
+        <label class="lr-stop-check" title="A trailer is the foundation for builds that sit on one, so it is a pre-station before Bay 1.">
+          <input type="checkbox" data-stop-trailer${stops.trailer ? ' checked' : ''}>
+          <span>This line has a trailer pre-station</span>
+        </label>
+        <p class="lr-note">There is one booth in the shop, on the Long Line. Short Line builds cross over to it and keep their bay while they are away, so a foaming build blocks its own line and every other build waiting for the booth. Which builds need foam is set per build, in the build panel.
+      </div>
+        </p>
       </div>
       ${unassigned.length ? `<div class="lr-warn">${unassigned.length} stage${unassigned.length === 1 ? '' : 's'} not yet assigned on this line — forecasts will under-count until they are.</div>` : ''}
       <div class="lr-split">
@@ -2506,6 +2965,7 @@ function renderBuildModal() {
         <label class="field"><span>Module type</span><select data-field="moduleType"><option value="">— None —</option>${(state.settings.moduleTypes || []).map((t) => `<option ${b.moduleType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
         <label class="field"><span>Production line</span><select data-field="lineId">${state.lines.map((l) => `<option value="${l.id}" ${b.lineId === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
         <label class="field"><span>Bays</span>${bayCheckboxes(b)}</label>
+        <label class="field"><span>Route stops <em class="hint">(this build only)</em></span>${stopToggles(b)}</label>
         <label class="field"><span>Status</span><select data-field="status">${['pipeline', 'confirmed', 'active', 'complete'].map((s) => `<option ${b.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
         <label class="field"><span>Start date <em class="hint">(confirmed / actual)</em></span><input type="date" value="${b.confirmedStart || ''}" data-field="startDate"></label>
         <label class="field"><span>Tentative start</span><input type="date" value="${b.tentativeStart || ''}" data-field="tentativeStart"></label>
@@ -2622,7 +3082,12 @@ function renderBuildModal() {
     </div>
     <div class="modal-foot">${draft
       ? `<span class="draft-note">Unsaved — this build won't be added until you save.</span><button class="btn" data-cancel-draft>Cancel</button><button class="btn primary" data-save-build>Save build</button>`
-      : `<button class="btn danger" data-delete-build>Delete build</button><button class="btn" data-close-build>Close</button>`}</div>`;
+      : `<button class="btn danger" data-delete-build>Delete build</button>
+         <span class="dup-group">
+           <label title="How many copies to create">Copies <input type="number" min="1" max="50" value="1" data-dup-count></label>
+           <button class="btn" data-duplicate-build title="Create copies of this build's specification. Logged hours, progress and bay assignment are NOT copied.">Duplicate</button>
+         </span>
+         <button class="btn" data-close-build>Close</button>`}</div>`;
   // Now that the markup is on the page, resolve signed URLs for any
   // private-bucket images it produced.
   hydrateSigned($('#buildModal'));
@@ -2707,6 +3172,8 @@ function wireGlobalEvents() {
   // The Print button is a convenience only — it opens the browser's own dialog.
   // beforeprint does the preparation, so Ctrl+P and the File menu behave identically.
   document.addEventListener('click', (e) => {
+    const sizeBtn = e.target.closest('[data-print-size]');
+    if (sizeBtn) { state.printSize = sizeBtn.dataset.printSize; render(); return; }
     if (e.target.closest('[data-print]')) window.print();
   });
   window.addEventListener('beforeprint', preparePrint);
@@ -2715,6 +3182,15 @@ function wireGlobalEvents() {
   $$('.tab').forEach((t) => t.addEventListener('click', () => { state.tab = t.dataset.tab; render(); }));
   $('#searchInput').addEventListener('input', (e) => { state.search = e.target.value; render(); });
   $('#lineFilter').addEventListener('change', (e) => { state.lineFilter = e.target.value; render(); });
+
+  // Gantt view mode. Delegated on body because the Gantt is re-rendered wholesale,
+  // so a listener bound to #ganttRoot's children would not survive.
+  document.body.addEventListener('click', (e) => {
+    const modeBtn = e.target.closest('[data-gantt-mode]');
+    if (!modeBtn) return;
+    state.ganttMode = modeBtn.dataset.ganttMode;
+    renderGantt();
+  });
 
   // Global open-build delegation.
   document.body.addEventListener('click', (e) => {
@@ -2797,6 +3273,7 @@ function wireGlobalEvents() {
   $('#bayPickerOverlay').addEventListener('click', (e) => { if (e.target.id === 'bayPickerOverlay') closeBayPicker(); });
   // Escape closes the open build modal — a standard expectation for daily use.
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('#bayPickerOverlay')?.classList.contains('open')) { closeBayPicker(); return; }
     if (e.key === 'Escape' && state.openBuildId) closeBuild();
   });
   $('#buildModal').addEventListener('change', async (e) => {
@@ -2841,6 +3318,12 @@ function wireGlobalEvents() {
       const cur = currentBuild(); const data = { ...(cur.inspectionData || {}) };
       data[iid] = { ...(data[iid] || {}), [inspField]: e.target.value };
       await patchBuild(id, { inspectionData: data });
+      return;
+    }
+    // Optional route stops (spray foam / trailer) are plain per-build booleans.
+    if (e.target.matches('[data-stop-field]')) {
+      await patchBuild(id, { [e.target.dataset.stopField]: e.target.checked });
+      renderBuildModal();
       return;
     }
     // Bay assignment is multi-select now, so rebuild the whole set from the ticked
@@ -3098,6 +3581,24 @@ function wireGlobalEvents() {
     }
     if (e.target.closest('[data-cancel-draft]')) { closeBuild(); return; }
     if (e.target.closest('[data-delete-build]')) { if (confirm('Delete this build permanently?')) { await repo.deleteBuild(id, actor()); closeBuild(); } return; }
+    if (e.target.closest('[data-duplicate-build]')) {
+      const src = currentBuild();
+      const n = Math.max(1, Math.min(50, Number($('[data-dup-count]', $('#buildModal'))?.value) || 1));
+      if (!src?.name?.trim()) { alert('Give the build a name before duplicating it.'); return; }
+      // Spelling out what is and is not copied, because the difference is the whole
+      // point and getting it wrong silently would corrupt the hours history.
+      const ok = confirm(
+        `Create ${n} ${n === 1 ? 'copy' : 'copies'} of "${src.name}"?\n\n`
+        + 'Copied: name, client, module type, line, target ship, stage durations, projected hours, route stops.\n'
+        + 'Not copied: logged hours, stage progress, bay assignment, attachments.\n\n'
+        + `${n === 1 ? 'The copy' : 'The copies'} will be created in Pipeline.`);
+      if (!ok) return;
+      const made = await duplicateBuild(id, n);
+      if (!made.length) { alert('Nothing was created. If this is a read-only session, writes are blocked.'); return; }
+      // Land on the first copy so the result is visible rather than implied.
+      openBuild(made[0].id);
+      return;
+    }
     if (e.target.id === 'completeAllStages') {
       // Mark every production stage 100% complete in one click.
       const stageProgress = Object.fromEntries(state.stages.map((s) => [s.id, 1]));
@@ -3202,6 +3703,19 @@ function wireGlobalEvents() {
     if (e.target.id === 'importBtn') $('#importFile').click();
   });
   $('#settingsRoot').addEventListener('change', async (e) => {
+    // Line Routing: where the spray foam stop sits on this line, and whether the
+    // line has a trailer pre-station.
+    if (e.target.matches('[data-stop-foam]') || e.target.matches('[data-stop-trailer]')) {
+      const key = state.routingLine;
+      const cur = lineStops(key);
+      const next = e.target.matches('[data-stop-foam]')
+        ? { ...cur, foamPosition: Number(e.target.value) || 0 }
+        : { ...cur, trailer: e.target.checked };
+      state.settings = { ...state.settings, lineStops: { ...(state.settings.lineStops || {}), [key]: next } };
+      await repo.saveSettings(state.settings);
+      renderSettings();
+      return;
+    }
     // Line Routing: assign a stage to a bay on the current line. The whole mapping
     // is rebuilt from the selects rather than patched in place, so rapid changes
     // cannot race each other into an inconsistent state.
